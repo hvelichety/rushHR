@@ -1,98 +1,1029 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { EventSourcePolyfill } from "event-source-polyfill";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  FlatList,
+  SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  RefreshControl,
+  ActivityIndicator,
+  TouchableOpacity,
+  Linking,
+  Alert,
+} from "react-native";
+import * as Haptics from 'expo-haptics';
+import Toast from 'react-native-toast-message';
+import FilterModal from "../../components/FilterModal";
+import RequestModal from "../../components/RequestModal";
+import RestaurantCard from "../../components/RestaurantCard";
+import { fetchRestaurant, requestWaitTime } from "../../utils/api";
+import { API_BASE_URL } from "../../utils/config";
+import { minutesSince } from "../../utils/time";
+import { Restaurant } from "../../utils/types";
+const EventSource = EventSourcePolyfill;
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import {
+  getCurrentLocation,
+  requestLocationPermission,
+  UserLocation,
+} from "../../utils/location";
+
+import {
+  getDeviceId,
+  registerForPushNotifications,
+  registerPushToken,
+  setupNotificationListeners,
+} from "../../utils/notifications";
+
+
+
+// --- Mock seed data (replace with API later) ---
+const NOW = Date.now();
+const MIN = 60_000;
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const [query, setQuery] = useState("");
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingRestaurantId, setLoadingRestaurantId] = useState<number | null>(null);
+  const [selectedCuisine, setSelectedCuisine] = useState<string>("All");
+  const [searchLoading, setSearchLoading] = useState(false);
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  // Location state
+  const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
+  const [locationReady, setLocationReady] = useState(false);
+  const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
+  const [showNearbyOnly, setShowNearbyOnly] = useState(false);
+
+  // filter modal state
+  const [filterModalOpen, setFilterModalOpen] = useState(false);
+
+  // modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [requested, setRequested] = useState<Restaurant | null>(null);
+  const [recommendations, setRecommendations] = useState<Restaurant[]>([]);
+
+  const [now, setNow] = useState(Date.now());
+
+  // Push notifications
+  useEffect(() => {
+    async function setupPushNotifications() {
+      const id = await getDeviceId();
+      const token = await registerForPushNotifications();
+      if (token) {
+        await registerPushToken(id, token);
+        console.log('🔔 Push notifications registered');
+      }
+    }
+
+    setupPushNotifications();
+
+    const cleanup = setupNotificationListeners((data) => {
+      console.log('👆 Notification tapped:', data);
+    });
+
+    return cleanup;
+  }, []);
+
+  // Setup location tracking
+  useEffect(() => {
+    async function setupLocation() {
+      console.log("📍 Requesting location permission...");
+      const hasPermission = await requestLocationPermission();
+
+      if (hasPermission) {
+        const location = await getCurrentLocation();
+        if (location) {
+          console.log("✅ Location obtained:", location);
+          setUserLocation(location);
+          // Don't default to nearby - let user choose
+          setShowNearbyOnly(false);
+
+          // Fire-and-forget coverage check — radius in meters (50,000 = ~31 miles)
+          fetch(`${API_BASE_URL}/restaurants/ensure-coverage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: location.latitude, lng: location.longitude, radius: 50000 }),
+          }).catch(() => {});
+        }
+      } else {
+        console.warn("⚠️ Location permission denied");
+        setLocationPermissionDenied(true);
+      }
+
+      // Signal that the location attempt is done (success or denied)
+      // so the restaurant fetch knows it has the best available location.
+      setLocationReady(true);
+    }
+
+    setupLocation();
+
+    // Update location every 5 minutes
+    const interval = setInterval(async () => {
+      const location = await getCurrentLocation();
+      if (location) {
+        console.log("🔄 Location updated:", location);
+        setUserLocation(location);
+      }
+    }, 5 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Refresh restaurant list periodically (every 5 minutes)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      console.log("🔁 Refreshing restaurant data...");
+      try {
+        let url = `${API_BASE_URL}/restaurants`;
+        if (userLocation) {
+          url += `?lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
+          if (showNearbyOnly) url += `&radius=50`;
+        }
+
+        const res = await fetch(url);
+        if (!res.ok) {
+          console.error("❌ Periodic refresh failed:", res.status);
+          return;
+        }
+
+        const raw = await res.json();
+
+        // Handle response format (check for .data property)
+        const restaurantArray = Array.isArray(raw) ? raw : (raw.data || []);
+
+        const apiData: Restaurant[] = restaurantArray.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          cuisine: r.cuisine || "Unknown",
+          phone: r.phone,
+          waitMinutes: r.wait_minutes,
+          lastUpdatedAt: r.last_updated_at < 1e12 ? r.last_updated_at * 1000 : r.last_updated_at,
+          image: r.image || 'https://via.placeholder.com/150',
+          timezone: r.timezone,
+          openHour: r.open_hour,
+          closeHour: r.close_hour,
+          isClosed: r.is_closed,
+          lastCalledAt: r.last_called_at,
+          cooldownMinutes: r.cooldown_minutes,
+          // Location fields
+          latitude: r.latitude,
+          longitude: r.longitude,
+          address: r.address,
+          city: r.city,
+          state: r.state,
+          rating: r.rating,
+          price_level: r.price_level,
+          distance_miles: r.distance_miles,
+        }));
+
+        setRestaurants(prev =>
+          apiData.map(apiR => {
+            const existing = prev.find(x => x.id === apiR.id);
+            if (!existing) return apiR;
+
+            // Preserve local lastCalledAt if it's more recent than backend
+            let lastCalledAt = existing.lastCalledAt;
+            if (apiR.lastCalledAt) {
+              const existingTime = existing.lastCalledAt ? new Date(existing.lastCalledAt).getTime() : 0;
+              const apiTime = new Date(apiR.lastCalledAt).getTime();
+              lastCalledAt = apiTime > existingTime ? apiR.lastCalledAt : existing.lastCalledAt;
+            }
+
+            return {
+              ...existing,
+              waitMinutes: apiR.waitMinutes ?? existing.waitMinutes,
+              isClosed: apiR.isClosed,
+              openHour: apiR.openHour,
+              closeHour: apiR.closeHour,
+              lastCalledAt,
+              cooldownMinutes: apiR.cooldownMinutes,
+              lastUpdatedAt: existing.lastUpdatedAt,
+            };
+          })
+        );
+      } catch (err) {
+        console.error("Failed to refresh restaurants:", err);
+      }
+    }, 5 * 60 * 1000); // every 5 minutes
+
+    return () => clearInterval(interval);
+  }, [userLocation, showNearbyOnly]); // Re-subscribe when location or filter changes
+
+  
+
+  // Fetch initial restaurant data — waits for location attempt to settle first
+  useEffect(() => {
+    if (!locationReady) return;
+
+    async function fetchInitialData() {
+      try {
+        setLoading(true);
+
+        // Always pass lat/lng when available so backend computes distance_miles.
+        // radius param only applied when showNearbyOnly is active.
+        let url = `${API_BASE_URL}/restaurants`;
+        if (userLocation) {
+          url += `?lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
+          if (showNearbyOnly) url += `&radius=50`;
+          console.log("📡 Fetching with location:", url);
+        } else {
+          console.log("📡 Fetching all restaurants (no location):", url);
+        }
+
+        const res = await fetch(url);
+
+        if (!res.ok) {
+          const text = await res.text();
+          console.error("❌ Fetch failed:", res.status, res.statusText, text);
+          Toast.show({
+            type: 'error',
+            text1: 'Failed to load restaurants',
+            text2: 'Please check your connection',
+          });
+          return;
+        }
+
+        const raw = await res.json();
+        console.log("📦 Raw response:", JSON.stringify(raw).substring(0, 200));
+        console.log("📦 Response type:", typeof raw, Array.isArray(raw) ? "IS ARRAY" : "NOT ARRAY");
+
+        // Handle different response formats
+        let restaurantArray;
+        if (Array.isArray(raw)) {
+          restaurantArray = raw;
+        } else if (raw && typeof raw === 'object' && Array.isArray(raw.data)) {
+          console.log("📦 Found 'data' array inside object (common backend pattern)");
+          restaurantArray = raw.data;
+        } else if (raw && typeof raw === 'object' && Array.isArray(raw.restaurants)) {
+          console.log("📦 Found 'restaurants' array inside object");
+          restaurantArray = raw.restaurants;
+        } else {
+          console.error("❌ Response format not recognized:", raw);
+          console.error("❌ Keys in response:", Object.keys(raw || {}));
+          return;
+        }
+
+        console.log("✅ Fetched restaurants:", restaurantArray.length, "items");
+
+        const data: Restaurant[] = restaurantArray.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          cuisine: r.cuisine || "Unknown",
+          phone: r.phone,
+          waitMinutes: r.wait_minutes,
+          lastUpdatedAt: r.last_updated_at < 1e12 ? r.last_updated_at * 1000 : r.last_updated_at,
+          image: r.image || 'https://via.placeholder.com/150',
+          timezone: r.timezone,
+          openHour: r.open_hour,
+          closeHour: r.close_hour,
+          isClosed: r.is_closed,
+          lastCalledAt: r.last_called_at,
+          cooldownMinutes: r.cooldown_minutes,
+          // Location fields
+          latitude: r.latitude,
+          longitude: r.longitude,
+          address: r.address,
+          city: r.city,
+          state: r.state,
+          rating: r.rating,
+          price_level: r.price_level,
+          distance_miles: r.distance_miles,
+        }));
+
+        console.log("✅ Mapped data:", data.length, "items");
+        console.log("✅ Setting restaurants state with", data.length, "items");
+        setRestaurants(data);
+        console.log("✅ State set complete");
+      } catch (err) {
+        console.error("❌ Failed to fetch restaurants:", err);
+        Toast.show({
+          type: 'error',
+          text1: 'Error loading restaurants',
+          text2: 'Please try again',
+        });
+      } finally {
+        setLoading(false);
+        setDataLoaded(true);
+      }
+    }
+
+    fetchInitialData();
+  }, [locationReady, showNearbyOnly]); // Wait for location to settle, then re-fetch if nearby filter changes
+
+const esRef = useRef<InstanceType<typeof EventSourcePolyfill> | null>(null);
+const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+useEffect(() => {
+  if (!dataLoaded) return;
+
+  function connect() {
+    console.log("📡 Connecting to live stream...");
+    const es = new EventSourcePolyfill(`${API_BASE_URL}/stream`);
+    esRef.current = es;
+
+    es.addEventListener("message", (event: MessageEvent) => {
+      try {
+        const raw = JSON.parse(event.data);
+        const updatedData = Array.isArray(raw) ? raw : (raw.data || null);
+
+        if (!Array.isArray(updatedData)) {
+          console.log("🫀 Heartbeat received — no update");
+          return;
+        }
+
+        setRestaurants((prev) =>
+          prev.map((r) => {
+            const latest = updatedData.find((u: any) => u.id === r.id);
+            if (!latest) return r;
+
+            if (
+              latest.wait_minutes !== r.waitMinutes ||
+              latest.is_closed !== r.isClosed ||
+              latest.last_called_at !== r.lastCalledAt
+            ) {
+              console.log(`⚡ ${r.name} updated → ${latest.wait_minutes} min`);
+              return { ...r, waitMinutes: latest.wait_minutes, isClosed: latest.is_closed, lastCalledAt: latest.last_called_at };
+            }
+            return r;
+          })
+        );
+      } catch (err) {
+        console.error("Error parsing live stream data:", err);
+      }
+    });
+
+    es.addEventListener("error", () => {
+      console.warn("❌ SSE connection lost, reconnecting in 5s...");
+      es.close();
+      esRef.current = null;
+      reconnectTimerRef.current = setTimeout(connect, 5000);
+    });
+  }
+
+  connect();
+
+  return () => {
+    console.log("🧹 Closing SSE connection");
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    esRef.current?.close();
+    esRef.current = null;
+  };
+}, [dataLoaded]);
+
+// Update 'now' every 30 seconds to refresh cooldown timers
+useEffect(() => {
+  const interval = setInterval(() => {
+    setNow(Date.now());
+  }, 30_000); // 30 seconds
+
+  return () => clearInterval(interval);
+}, []);
+
+  // Pull to refresh
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      // Refresh location first
+      const location = await getCurrentLocation();
+      if (location) {
+        setUserLocation(location);
+        console.log("🔄 Location refreshed:", location);
+      }
+
+      let url = `${API_BASE_URL}/restaurants`;
+      const currentLocation = location || userLocation;
+      if (currentLocation) {
+        url += `?lat=${currentLocation.latitude}&lng=${currentLocation.longitude}`;
+        if (showNearbyOnly) url += `&radius=50`;
+      }
+
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        console.error("❌ Refresh failed:", res.status);
+        Toast.show({
+          type: 'error',
+          text1: 'Refresh failed',
+          text2: 'Please try again',
+        });
+        return;
+      }
+
+      const raw = await res.json();
+      const restaurantArray = Array.isArray(raw) ? raw : (raw.data || []);
+
+      const data: Restaurant[] = restaurantArray.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        cuisine: r.cuisine || "Unknown",
+        phone: r.phone,
+        waitMinutes: r.wait_minutes,
+        lastUpdatedAt: r.last_updated_at < 1e12 ? r.last_updated_at * 1000 : r.last_updated_at,
+        image: r.image || 'https://via.placeholder.com/150',
+        timezone: r.timezone,
+        openHour: r.open_hour,
+        closeHour: r.close_hour,
+        isClosed: r.is_closed,
+        lastCalledAt: r.last_called_at,
+        cooldownMinutes: r.cooldown_minutes,
+        // Location fields
+        latitude: r.latitude,
+        longitude: r.longitude,
+        address: r.address,
+        city: r.city,
+        state: r.state,
+        rating: r.rating,
+        price_level: r.price_level,
+        distance_miles: r.distance_miles,
+      }));
+
+      setRestaurants(data);
+      Toast.show({
+        type: 'success',
+        text1: 'Refreshed',
+        text2: `${data.length} restaurants updated`,
+      });
+    } catch (err) {
+      console.error("Failed to refresh:", err);
+      Toast.show({
+        type: 'error',
+        text1: 'Refresh failed',
+        text2: 'Check your connection',
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Available cuisines from restaurants
+  const availableCuisines = useMemo(() => {
+    const cuisines = new Set(restaurants.map(r => r.cuisine));
+    return ["All", ...Array.from(cuisines).sort()];
+  }, [restaurants]);
+
+  // Place types that are NOT restaurants — imported by the backend from Google Places
+  // but should never appear in the list.
+  const NON_RESTAURANT_TYPES = new Set([
+    "bowling_alley", "bowling", "amusement_park", "amusement_center",
+    "golf_course", "mini_golf", "entertainment", "entertainment_center",
+    "spa", "beauty_salon", "hair_salon", "nail_salon", "massage",
+    "gym", "fitness_center", "health",
+    "convenience_store", "gas_station", "grocery_store", "supermarket",
+    "pharmacy", "drug_store",
+    "car_wash", "car_dealer", "car_repair",
+    "hotel", "lodging", "motel",
+    "movie_theater", "theater", "theatre",
+    "museum", "art_gallery",
+    "shopping_mall", "department_store", "clothing_store",
+    "laundry", "storage",
+  ]);
+
+  // Name keywords that are dead giveaways of non-restaurants
+  const NON_RESTAURANT_NAMES = [
+    "wawa", "lucky strike", "topgolf", "top golf", "spa", "sauna",
+    "bowling", "cinemark", "amc theater", "regal cinema",
+    "planet fitness", "la fitness", "anytime fitness", "equinox",
+    "cvs", "walgreens", "rite aid", "target", "walmart", "costco",
+    "marriott", "hilton", "hyatt", "holiday inn", "courtyard",
+  ];
+
+  // Search, cuisine, and nearby filter
+  const filtered = useMemo(() => {
+    let result = restaurants;
+    const q = query.trim().toLowerCase();
+
+    // Strip non-restaurants from the list (backend imports too broadly from Google Places)
+    result = result.filter((r) => {
+      const cuisineLower = (r.cuisine || "").toLowerCase();
+      const nameLower = r.name.toLowerCase();
+      if (NON_RESTAURANT_TYPES.has(cuisineLower)) return false;
+      if (NON_RESTAURANT_NAMES.some((n) => nameLower.includes(n))) return false;
+      return true;
+    });
+
+    // Apply cuisine filter
+    if (selectedCuisine !== "All") {
+      result = result.filter((r) => r.cuisine === selectedCuisine);
+    }
+
+    // Apply nearby filter (explicit toggle, tighter radius)
+    if (showNearbyOnly && userLocation) {
+      result = result.filter((r) =>
+        r.distance_miles !== undefined &&
+        r.distance_miles !== null &&
+        r.distance_miles <= 10
+      );
+    }
+
+    // Default 30-mile radius filter when location is known and no search query.
+    // Restaurants with no distance data are excluded — they can't be verified nearby.
+    // Search bypasses this so users can explicitly find distant restaurants.
+    if (!q && userLocation) {
+      result = result.filter((r) =>
+        r.distance_miles !== undefined &&
+        r.distance_miles !== null &&
+        r.distance_miles <= 30
+      );
+    }
+
+    // Apply search filter
+    if (q) {
+      result = result.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.cuisine.toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
+
+  // Remote search fallback when local results are empty
+  useEffect(() => {
+    const q = query.trim();
+    if (!q || filtered.length > 0) return;
+
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/restaurants/search?q=${encodeURIComponent(q)}`);
+        if (!res.ok) return;
+        const raw = await res.json();
+        const arr = Array.isArray(raw) ? raw : (raw.data || raw.restaurants || []);
+        if (!arr.length) return;
+
+        const mapped: Restaurant[] = arr.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          cuisine: r.cuisine || "Unknown",
+          phone: r.phone,
+          waitMinutes: r.wait_minutes,
+          lastUpdatedAt: r.last_updated_at < 1e12 ? r.last_updated_at * 1000 : r.last_updated_at,
+          image: r.image || 'https://via.placeholder.com/150',
+          timezone: r.timezone,
+          openHour: r.open_hour,
+          closeHour: r.close_hour,
+          isClosed: r.is_closed,
+          lastCalledAt: r.last_called_at,
+          cooldownMinutes: r.cooldown_minutes,
+          latitude: r.latitude,
+          longitude: r.longitude,
+          address: r.address,
+          city: r.city,
+          state: r.state,
+          rating: r.rating,
+          price_level: r.price_level,
+          distance_miles: r.distance_miles,
+        }));
+
+        setRestaurants(prev => {
+          const existingIds = new Set(prev.map(x => x.id));
+          const newOnes = mapped.filter(r => !existingIds.has(r.id));
+          return newOnes.length ? [...prev, ...newOnes] : prev;
+        });
+      } catch {
+        // silent — search fallback failures are non-critical
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [query, filtered.length]);
+
+  // Request handler with haptics and toasts
+  const handleRequest = async (r: Restaurant) => {
+    // Set loading state
+    setLoadingRestaurantId(r.id);
+
+    // Haptic feedback
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    // 1️⃣ Open the popup immediately
+    setRequested(r);
+    setModalOpen(true);
+
+    // Pick 2–3 random recommendations
+    const recs = restaurants
+      .filter(x => x.id !== r.id)
+      .sort(() => 0.5 - Math.random())
+      .slice(0, 3);
+    setRecommendations(recs);
+
+    try {
+      // 2️⃣ Trigger backend Twilio call
+      const res = await requestWaitTime(r, 4);
+
+      if (res) {
+        console.log("✅ Wait time update triggered:", res);
+
+        // Show success toast
+        Toast.show({
+          type: 'success',
+          text1: `Calling ${r.name}...`,
+          text2: 'Usually takes 1-2 minutes',
+        });
+
+        // Success haptic
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+        // 3️⃣ Optimistically set lastCalledAt so cooldown timer starts immediately
+        if (!res.skipped) {
+          setRestaurants(prev =>
+            prev.map(x =>
+              x.id === r.id ? { ...x, lastCalledAt: new Date().toISOString() } : x
+            )
+          );
+        }
+
+        // 4️⃣ Handle skipped calls
+        if (res.skipped && res.reason === "cooldown") {
+          setLoadingRestaurantId(null);
+          Toast.show({
+            type: 'info',
+            text1: 'Please wait',
+            text2: `You can request again in ${res.remaining_minutes || 30} minutes`,
+          });
+          return;
+        }
+      } else {
+        console.log("❌ Backend call failed — no response");
+        setLoadingRestaurantId(null);
+        Toast.show({
+          type: 'error',
+          text1: 'Request failed',
+          text2: 'Please try again',
+        });
+        return;
+      }
+
+      // 4️⃣ After 5s, poll backend for the updated wait time and lastCalledAt
+      setTimeout(async () => {
+        console.log("🔍 Fetching restaurant ID:", r.id);
+        const latest = await fetchRestaurant(Number(r.id));
+
+        if (latest) {
+          console.log("📦 Got updated data from backend:", latest);
+
+          setRestaurants(prev =>
+            prev.map(x =>
+              x.id === r.id
+                ? {
+                    ...x,
+                    waitMinutes:
+                      latest.wait_minutes !== undefined
+                        ? latest.wait_minutes
+                        : x.waitMinutes,
+                    lastUpdatedAt: Date.now(),
+                    lastCalledAt: latest.last_called_at || x.lastCalledAt,
+                    cooldownMinutes: latest.cooldown_minutes || x.cooldownMinutes,
+                  }
+                : x
+            )
+          );
+
+          if (latest.wait_minutes !== null && latest.wait_minutes !== undefined) {
+            Toast.show({
+              type: 'success',
+              text1: `Wait time ready!`,
+              text2: `${r.name} has a ${latest.wait_minutes > 0 ? `${latest.wait_minutes} min wait` : 'no wait'}`,
+            });
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          }
+        } else {
+          console.warn("⚠️ No updated data from backend for", r.id);
+        }
+
+        setLoadingRestaurantId(null);
+      }, 5000);
+    } catch (err) {
+      console.error("❌ Error while calling backend:", err);
+      setLoadingRestaurantId(null);
+      Toast.show({
+        type: 'error',
+        text1: 'Network error',
+        text2: 'Check your internet connection',
+      });
+    }
+  };  
+
+  const renderItem = ({ item }: { item: Restaurant }) => {
+    const cooldown = item.cooldownMinutes || 30;
+
+    // Calculate minutes since last CALL (not last update)
+    // If never called, allow immediate request
+    let minsSinceCall: number;
+    let canRequest: boolean;
+
+    if (!item.lastCalledAt) {
+      // Never called - user can request immediately
+      minsSinceCall = cooldown; // Show as ready
+      canRequest = true;
+    } else {
+      // Backend may return RFC 2822 ("Sun, 08 Mar 2026 03:53:35 GMT") or ISO 8601
+      // RFC 2822 already has timezone info — don't append Z, just parse directly
+      // ISO 8601 without Z needs Z appended to treat as UTC
+      let lastCalledStr = item.lastCalledAt;
+      if (!lastCalledStr.includes('GMT') && !lastCalledStr.endsWith('Z')) {
+        lastCalledStr = lastCalledStr + 'Z';
+      }
+      const lastCalledTime = new Date(lastCalledStr).getTime();
+      if (isNaN(lastCalledTime)) {
+        // Still unparseable — treat as never called so button re-enables
+        minsSinceCall = cooldown;
+        canRequest = true;
+      } else {
+        minsSinceCall = Math.max(0, Math.floor((now - lastCalledTime) / 60000));
+        canRequest = minsSinceCall >= cooldown;
+      }
+    }
+
+    // Minutes since update is just for display
+    const minsSinceUpdate = minutesSince(item.lastUpdatedAt);
+    const isLoading = loadingRestaurantId === item.id;
+
+    return (
+      <RestaurantCard
+        restaurant={item}
+        minutesSinceUpdate={minsSinceUpdate}
+        minutesSinceCall={minsSinceCall}
+        cooldownMinutes={cooldown}
+        canRequest={isLoading ? false : canRequest}
+        isLoading={isLoading}
+        onRequest={() => handleRequest(item)}
+      />
+    );
+  };
+  
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="dark-content" />
+      <View style={styles.container}>
+        <Text style={styles.logo}>🍽️ RushHR</Text>
+        <Text style={styles.subtitle}>
+          {userLocation ? "What's nearby?" : "Find a restaurant near you"}
+        </Text>
+
+        {/* Location Permission Banner */}
+        {locationPermissionDenied && (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>Enable location to see nearby restaurants</Text>
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  'Location Permission',
+                  'Please enable location services in your device settings to see nearby restaurants.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                  ]
+                );
+              }}
+              style={styles.bannerButton}
+            >
+              <Text style={styles.bannerButtonText}>Settings</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <View style={styles.searchWrapper}>
+          <TextInput
+            placeholder="Search by name or cuisine"
+            placeholderTextColor="#94A3B8"
+            value={query}
+            onChangeText={setQuery}
+            style={[styles.search, { flex: 1 }]}
+          />
+          {searchLoading && (
+            <ActivityIndicator
+              size="small"
+              color="#F45B5B"
+              style={styles.searchSpinner}
+            />
+          )}
+        </View>
+
+        {/* Debug info */}
+        {__DEV__ && (
+          <Text style={styles.debug}>
+            Restaurants: {restaurants.length} | Filtered: {filtered.length} | Location: {userLocation ? '✅' : '❌'}
+          </Text>
+        )}
+
+        {/* Filters Button */}
+        {(() => {
+          const activeFilterCount = (selectedCuisine !== "All" ? 1 : 0) + (showNearbyOnly ? 1 : 0);
+          return (
+            <TouchableOpacity
+              style={[styles.filtersButton, activeFilterCount > 0 && styles.filtersButtonActive]}
+              onPress={() => {
+                setFilterModalOpen(true);
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.filtersIcon}>⚙</Text>
+              <Text style={[styles.filtersText, activeFilterCount > 0 && styles.filtersTextActive]}>
+                {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters"}
+              </Text>
+            </TouchableOpacity>
+          );
+        })()}
+
+        {/* Loading state */}
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#F45B5B" />
+            <Text style={styles.loadingText}>Loading restaurants...</Text>
+          </View>
+        ) : filtered.length === 0 ? (
+          /* Empty state */
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>
+              {query || selectedCuisine !== "All" || showNearbyOnly
+                ? "No restaurants found"
+                : locationPermissionDenied
+                ? "Enable location to see nearby restaurants"
+                : "No restaurants available"}
+            </Text>
+            <Text style={styles.emptySubtext}>
+              {query || selectedCuisine !== "All" || showNearbyOnly
+                ? "Try a different search or filter"
+                : "Pull down to refresh"}
+            </Text>
+          </View>
+        ) : (
+          /* Restaurant list */
+          <FlatList
+            data={filtered}
+            keyExtractor={(item) => item.id.toString()}
+            renderItem={renderItem}
+            extraData={now}
+            contentContainerStyle={{ paddingBottom: 32 }}
+            ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor="#F45B5B"
+                colors={["#F45B5B"]}
+              />
+            }
+          />
+        )}
+
+        <FilterModal
+          visible={filterModalOpen}
+          onClose={() => setFilterModalOpen(false)}
+          selectedCuisine={selectedCuisine}
+          showNearbyOnly={showNearbyOnly}
+          availableCuisines={availableCuisines}
+          hasLocation={!!userLocation}
+          onApply={(cuisine, nearby) => {
+            setSelectedCuisine(cuisine);
+            setShowNearbyOnly(nearby);
+            setFilterModalOpen(false);
+          }}
+        />
+        <RequestModal
+          visible={modalOpen}
+          onClose={() => setModalOpen(false)}
+          requested={requested}
+          recommendations={recommendations}
+        />
+        <Toast />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  safe: { flex: 1, backgroundColor: "#F8FAFC" },
+  container: {
+    flex: 1,
+    paddingHorizontal: 16,
+    gap: 12,
   },
-  stepContainer: {
-    gap: 8,
+  logo: {
+    fontSize: 28,
+    fontWeight: "800",
+    marginTop: 8,
+    color: "#0F172A",
+  },
+  subtitle: {
+    color: "#475569",
     marginBottom: 8,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  banner: {
+    backgroundColor: "#FEF3C7",
+    borderRadius: 12,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  bannerText: {
+    color: "#92400E",
+    fontSize: 14,
+    flex: 1,
+    fontWeight: "600",
+  },
+  bannerButton: {
+    backgroundColor: "#F59E0B",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  bannerButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  searchWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E2E8F0",
+  },
+  search: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  searchSpinner: {
+    paddingRight: 12,
+  },
+  debug: {
+    fontSize: 11,
+    color: "#10B981",
+    backgroundColor: "#F0FDF4",
+    padding: 6,
+    borderRadius: 6,
+    fontWeight: "600",
+  },
+  filtersButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderWidth: 1.5,
+    borderColor: "#E2E8F0",
+  },
+  filtersButtonActive: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#F45B5B",
+  },
+  filtersIcon: {
+    fontSize: 14,
+    color: "#64748B",
+  },
+  filtersText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  filtersTextActive: {
+    color: "#F45B5B",
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: "#94A3B8",
+    textAlign: "center",
   },
 });
