@@ -44,6 +44,38 @@ import {
 const NOW = Date.now();
 const MIN = 60_000;
 
+// Place types/names that are NOT restaurants — backend imports too broadly from Google Places.
+const NON_RESTAURANT_TYPES = new Set([
+  "bowling_alley", "bowling", "amusement_park", "amusement_center",
+  "golf_course", "mini_golf", "entertainment", "entertainment_center",
+  "spa", "beauty_salon", "hair_salon", "nail_salon", "massage",
+  "gym", "fitness_center", "health",
+  "convenience_store", "gas_station", "grocery_store", "supermarket",
+  "pharmacy", "drug_store",
+  "car_wash", "car_dealer", "car_repair",
+  "hotel", "lodging", "motel",
+  "movie_theater", "theater", "theatre",
+  "museum", "art_gallery",
+  "shopping_mall", "department_store", "clothing_store",
+  "laundry", "storage",
+]);
+
+const NON_RESTAURANT_NAMES = [
+  "wawa", "lucky strike", "topgolf", "top golf", "spa", "sauna",
+  "bowling", "cinemark", "amc theater", "regal cinema",
+  "planet fitness", "la fitness", "anytime fitness", "equinox",
+  "cvs", "walgreens", "rite aid", "target", "walmart", "costco",
+  "marriott", "hilton", "hyatt", "holiday inn", "courtyard",
+];
+
+function isRestaurant(name: string, cuisine: string): boolean {
+  const nameLower = name.toLowerCase();
+  const cuisineLower = cuisine.toLowerCase();
+  if (NON_RESTAURANT_TYPES.has(cuisineLower)) return false;
+  if (NON_RESTAURANT_NAMES.some((n) => nameLower.includes(n))) return false;
+  return true;
+}
+
 export default function HomeScreen() {
   const [query, setQuery] = useState("");
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -467,45 +499,13 @@ useEffect(() => {
     return ["All", ...Array.from(cuisines).sort()];
   }, [restaurants]);
 
-  // Place types that are NOT restaurants — imported by the backend from Google Places
-  // but should never appear in the list.
-  const NON_RESTAURANT_TYPES = new Set([
-    "bowling_alley", "bowling", "amusement_park", "amusement_center",
-    "golf_course", "mini_golf", "entertainment", "entertainment_center",
-    "spa", "beauty_salon", "hair_salon", "nail_salon", "massage",
-    "gym", "fitness_center", "health",
-    "convenience_store", "gas_station", "grocery_store", "supermarket",
-    "pharmacy", "drug_store",
-    "car_wash", "car_dealer", "car_repair",
-    "hotel", "lodging", "motel",
-    "movie_theater", "theater", "theatre",
-    "museum", "art_gallery",
-    "shopping_mall", "department_store", "clothing_store",
-    "laundry", "storage",
-  ]);
-
-  // Name keywords that are dead giveaways of non-restaurants
-  const NON_RESTAURANT_NAMES = [
-    "wawa", "lucky strike", "topgolf", "top golf", "spa", "sauna",
-    "bowling", "cinemark", "amc theater", "regal cinema",
-    "planet fitness", "la fitness", "anytime fitness", "equinox",
-    "cvs", "walgreens", "rite aid", "target", "walmart", "costco",
-    "marriott", "hilton", "hyatt", "holiday inn", "courtyard",
-  ];
-
   // Search, cuisine, and nearby filter
   const filtered = useMemo(() => {
     let result = restaurants;
     const q = query.trim().toLowerCase();
 
     // Strip non-restaurants from the list (backend imports too broadly from Google Places)
-    result = result.filter((r) => {
-      const cuisineLower = (r.cuisine || "").toLowerCase();
-      const nameLower = r.name.toLowerCase();
-      if (NON_RESTAURANT_TYPES.has(cuisineLower)) return false;
-      if (NON_RESTAURANT_NAMES.some((n) => nameLower.includes(n))) return false;
-      return true;
-    });
+    result = result.filter((r) => isRestaurant(r.name, r.cuisine || ""));
 
     // Apply cuisine filter
     if (selectedCuisine !== "All") {
@@ -532,13 +532,9 @@ useEffect(() => {
       );
     }
 
-    // Apply search filter
+    // Apply search filter — name only, not cuisine (cuisine has the dedicated filter above)
     if (q) {
-      result = result.filter(
-        (r) =>
-          r.name.toLowerCase().includes(q) ||
-          r.cuisine.toLowerCase().includes(q)
-      );
+      result = result.filter((r) => r.name.toLowerCase().includes(q));
     }
 
     return result;
@@ -584,7 +580,9 @@ useEffect(() => {
 
         setRestaurants(prev => {
           const existingIds = new Set(prev.map(x => x.id));
-          const newOnes = mapped.filter(r => !existingIds.has(r.id));
+          const newOnes = mapped.filter(r =>
+            !existingIds.has(r.id) && isRestaurant(r.name, r.cuisine || "")
+          );
           return newOnes.length ? [...prev, ...newOnes] : prev;
         });
       } catch {
