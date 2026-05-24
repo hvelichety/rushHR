@@ -5,19 +5,19 @@ import { formatTimeAgo } from "../utils/time";
 type Props = {
   restaurant: Restaurant;
   minutesSinceUpdate: number;
-  minutesSinceCall: number; // ← NEW: minutes since last call (not update)
-  cooldownMinutes: number;
+  secondsSinceCall: number;
+  cooldownSeconds: number;
   canRequest: boolean;
-  isLoading?: boolean; // ← NEW: loading state for button
+  isLoading?: boolean;
   onRequest: () => void;
 };
 
 export default function RestaurantCard({
   restaurant,
   minutesSinceUpdate,
-  minutesSinceCall,
-  cooldownMinutes,
-  canRequest,
+  secondsSinceCall: _secondsSinceCall,
+  cooldownSeconds: _cooldownSeconds,
+  canRequest: _canRequest,
   isLoading = false,
   onRequest,
 }: Props) {
@@ -27,25 +27,26 @@ export default function RestaurantCard({
   const GENERIC_CUISINES = new Set(["restaurant", "food", "establishment", "point_of_interest", "unknown"]);
   const displayCuisine = cuisine && !GENERIC_CUISINES.has(cuisine.toLowerCase()) ? cuisine : null;
 
-  // ✅ FIX: Calculate remaining time based on last CALL, not last update
-  const remaining = Math.max(0, cooldownMinutes - minutesSinceCall);
-  const isAvailable = canRequest || remaining === 0;
-  const disabledReason = isLoading || isAvailable
-    ? ""
-    : `Available in ${remaining} min`;
+  // COOLDOWN DISABLED (today) — button always available unless closed or loading
+  // const isAvailable = canRequest;
+  // const remainingSecs = Math.max(0, cooldownSeconds - secondsSinceCall);
+  // let disabledReason = "";
+  // if (!isLoading && !isAvailable) {
+  //   const minsRemaining = Math.max(1, Math.ceil(remainingSecs / 60));
+  //   disabledReason = `Available in ${minsRemaining} min`;
+  // }
+  const isAvailable = true;
 
   const isClosed = restaurant.isClosed;
 
   // ✅ Accessibility support
   const accessibilityLabel = isClosed
     ? `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, Closed`
-    : `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, ${waitMinutes} minute wait, Last updated ${formatTimeAgo(minutesSinceUpdate)}`;
+    : `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, ${waitMinutes} minute wait, updated ${formatTimeAgo(minutesSinceUpdate)}`;
 
   const buttonAccessibilityLabel = isClosed
     ? `${name} is closed`
-    : isAvailable
-    ? `Request wait time for ${name}`
-    : `Wait time request on cooldown, ${disabledReason}`;
+    : `Request wait time for ${name}`;
 
   return (
     <View
@@ -101,18 +102,18 @@ export default function RestaurantCard({
 
         <Pressable
           onPress={onRequest}
-          disabled={!isAvailable || isClosed || isLoading}
+          disabled={isClosed || isLoading}
           accessible={true}
           accessibilityLabel={buttonAccessibilityLabel}
           accessibilityRole="button"
           accessibilityState={{
-            disabled: !isAvailable || isClosed || isLoading,
+            disabled: isClosed || isLoading,
             busy: isLoading,
           }}
           style={({ pressed }) => [
             styles.button,
-            (!isAvailable || isClosed || isLoading) && styles.buttonDisabled,
-            pressed && isAvailable && !isClosed && !isLoading && styles.buttonPressed,
+            (isClosed || isLoading) && styles.buttonDisabled,
+            pressed && !isClosed && !isLoading && styles.buttonPressed,
           ]}
         >
           {isLoading ? (
@@ -130,11 +131,7 @@ export default function RestaurantCard({
               ]}
               numberOfLines={1}
             >
-              {isClosed
-                ? "Closed 🌙"
-                : isAvailable
-                ? "Request Wait Time"
-                : disabledReason}
+              {isClosed ? "Closed 🌙" : "Request Wait Time"}
             </Text>
           )}
         </Pressable>

@@ -1,5 +1,6 @@
 import { EventSourcePolyfill } from "event-source-polyfill";
 import { useEffect, useMemo, useRef, useState } from "react";
+// import { resolveCooldownMinutes } from "../../utils/cooldown"; // COOLDOWN DISABLED (today)
 import {
   FlatList,
   SafeAreaView,
@@ -100,14 +101,18 @@ export default function HomeScreen() {
   const [requested, setRequested] = useState<Restaurant | null>(null);
   const [recommendations, setRecommendations] = useState<Restaurant[]>([]);
 
-  const [now, setNow] = useState(Date.now());
+  // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
+  const deviceIdRef = useRef<string | null>(null);
+  const pushTokenRef = useRef<string | null>(null);
 
   // Push notifications
   useEffect(() => {
     async function setupPushNotifications() {
       const id = await getDeviceId();
+      deviceIdRef.current = id;
       const token = await registerForPushNotifications();
       if (token) {
+        pushTokenRef.current = token;
         await registerPushToken(id, token);
         console.log('🔔 Push notifications registered');
       }
@@ -408,14 +413,11 @@ useEffect(() => {
   };
 }, [dataLoaded]);
 
-// Update 'now' every 30 seconds to refresh cooldown timers
-useEffect(() => {
-  const interval = setInterval(() => {
-    setNow(Date.now());
-  }, 30_000); // 30 seconds
-
-  return () => clearInterval(interval);
-}, []);
+// COOLDOWN DISABLED (today)
+// useEffect(() => {
+//   const interval = setInterval(() => setNow(Date.now()), 10_000);
+//   return () => clearInterval(interval);
+// }, []);
 
   // Pull to refresh
   const onRefresh = async () => {
@@ -475,7 +477,32 @@ useEffect(() => {
         distance_miles: r.distance_miles,
       }));
 
-      setRestaurants(data);
+      // Merge with existing state — the list endpoint may return null for
+      // last_called_at and cooldown_minutes, so always prefer local state for those.
+      setRestaurants(prev => {
+        const prevMap = new Map(prev.map(x => [x.id, x]));
+        return data.map(r => {
+          const existing = prevMap.get(r.id);
+          if (!existing) return r;
+
+          // Pick the most recent lastCalledAt, parsed as UTC
+          const toUtcMs = (s: string | undefined) => {
+            if (!s) return 0;
+            const str = s.trim();
+            const utc = str.endsWith('Z') || str.includes('+') || str.toUpperCase().includes('GMT')
+              ? str : str + 'Z';
+            return new Date(utc).getTime() || 0;
+          };
+          const lastCalledAt = toUtcMs(r.lastCalledAt) >= toUtcMs(existing.lastCalledAt)
+            ? (r.lastCalledAt || existing.lastCalledAt)
+            : existing.lastCalledAt;
+
+          // Prefer local cooldownMinutes if backend returns null/undefined
+          const cooldownMinutes = r.cooldownMinutes ?? existing.cooldownMinutes;
+
+          return { ...r, lastCalledAt, cooldownMinutes };
+        });
+      });
       Toast.show({
         type: 'success',
         text1: 'Refreshed',
@@ -540,15 +567,19 @@ useEffect(() => {
     return result;
   }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
 
-  // Remote search fallback when local results are empty
+  // Remote search fallback: 4+ chars and fewer than 3 local results
   useEffect(() => {
     const q = query.trim();
-    if (!q || filtered.length > 0) return;
+    if (q.length < 4 || filtered.length >= 3) return;
 
     const timer = setTimeout(async () => {
       setSearchLoading(true);
       try {
-        const res = await fetch(`${API_BASE_URL}/restaurants/search?q=${encodeURIComponent(q)}`);
+        let searchUrl = `${API_BASE_URL}/restaurants/search?q=${encodeURIComponent(q)}`;
+        if (userLocation) {
+          searchUrl += `&lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
+        }
+        const res = await fetch(searchUrl);
         if (!res.ok) return;
         const raw = await res.json();
         const arr = Array.isArray(raw) ? raw : (raw.data || raw.restaurants || []);
@@ -593,7 +624,7 @@ useEffect(() => {
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [query, filtered.length]);
+  }, [query, filtered.length, userLocation]);
 
   // Request handler with haptics and toasts
   const handleRequest = async (r: Restaurant) => {
@@ -616,50 +647,28 @@ useEffect(() => {
 
     try {
       // 2️⃣ Trigger backend Twilio call
-      const res = await requestWaitTime(r, 4);
+      const res = await requestWaitTime(r, 4, {
+        deviceId: deviceIdRef.current ?? undefined,
+        pushToken: pushTokenRef.current ?? undefined,
+        userLat: userLocation?.latitude,
+        userLng: userLocation?.longitude,
+      });
 
-      if (res) {
-        console.log("✅ Wait time update triggered:", res);
+      console.log("✅ Call triggered:", res);
 
-        // Show success toast
-        Toast.show({
-          type: 'success',
-          text1: `Calling ${r.name}...`,
-          text2: 'Usually takes 1-2 minutes',
-        });
+      // COOLDOWN DISABLED (today)
+      // setRestaurants(prev =>
+      //   prev.map(x =>
+      //     x.id === r.id ? { ...x, lastCalledAt: new Date().toISOString() } : x
+      //   )
+      // );
 
-        // Success haptic
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-        // 3️⃣ Optimistically set lastCalledAt so cooldown timer starts immediately
-        if (!res.skipped) {
-          setRestaurants(prev =>
-            prev.map(x =>
-              x.id === r.id ? { ...x, lastCalledAt: new Date().toISOString() } : x
-            )
-          );
-        }
-
-        // 4️⃣ Handle skipped calls
-        if (res.skipped && res.reason === "cooldown") {
-          setLoadingRestaurantId(null);
-          Toast.show({
-            type: 'info',
-            text1: 'Please wait',
-            text2: `You can request again in ${res.remaining_minutes || 30} minutes`,
-          });
-          return;
-        }
-      } else {
-        console.log("❌ Backend call failed — no response");
-        setLoadingRestaurantId(null);
-        Toast.show({
-          type: 'error',
-          text1: 'Request failed',
-          text2: 'Please try again',
-        });
-        return;
-      }
+      Toast.show({
+        type: 'success',
+        text1: `Calling ${r.name}...`,
+        text2: 'Usually takes 1-2 minutes',
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       // 4️⃣ After 5s, poll backend for the updated wait time and lastCalledAt
       setTimeout(async () => {
@@ -679,8 +688,12 @@ useEffect(() => {
                         ? latest.wait_minutes
                         : x.waitMinutes,
                     lastUpdatedAt: Date.now(),
-                    lastCalledAt: latest.last_called_at || x.lastCalledAt,
-                    cooldownMinutes: latest.cooldown_minutes || x.cooldownMinutes,
+                    // COOLDOWN DISABLED (today)
+                    // lastCalledAt: latest.last_called_at || x.lastCalledAt,
+                    // cooldownMinutes: resolveCooldownMinutes(
+                    //   latest.cooldown_minutes,
+                    //   resolveCooldownMinutes(x.cooldownMinutes)
+                    // ),
                   }
                 : x
             )
@@ -703,46 +716,21 @@ useEffect(() => {
     } catch (err) {
       console.error("❌ Error while calling backend:", err);
       setLoadingRestaurantId(null);
+      const message =
+        err instanceof Error ? err.message : "Please try again";
       Toast.show({
         type: 'error',
-        text1: 'Network error',
-        text2: 'Check your internet connection',
+        text1: 'Request failed',
+        text2: message,
       });
     }
   };  
 
   const renderItem = ({ item }: { item: Restaurant }) => {
-    const cooldown = item.cooldownMinutes || 30;
+    // COOLDOWN DISABLED (today)
+  // const cooldownMins = resolveCooldownMinutes(item.cooldownMinutes);
+  // ... lastCalledAt / canRequest logic ...
 
-    // Calculate minutes since last CALL (not last update)
-    // If never called, allow immediate request
-    let minsSinceCall: number;
-    let canRequest: boolean;
-
-    if (!item.lastCalledAt) {
-      // Never called - user can request immediately
-      minsSinceCall = cooldown; // Show as ready
-      canRequest = true;
-    } else {
-      // Backend may return RFC 2822 ("Sun, 08 Mar 2026 03:53:35 GMT") or ISO 8601
-      // RFC 2822 already has timezone info — don't append Z, just parse directly
-      // ISO 8601 without Z needs Z appended to treat as UTC
-      let lastCalledStr = item.lastCalledAt;
-      if (!lastCalledStr.includes('GMT') && !lastCalledStr.endsWith('Z')) {
-        lastCalledStr = lastCalledStr + 'Z';
-      }
-      const lastCalledTime = new Date(lastCalledStr).getTime();
-      if (isNaN(lastCalledTime)) {
-        // Still unparseable — treat as never called so button re-enables
-        minsSinceCall = cooldown;
-        canRequest = true;
-      } else {
-        minsSinceCall = Math.max(0, Math.floor((now - lastCalledTime) / 60000));
-        canRequest = minsSinceCall >= cooldown;
-      }
-    }
-
-    // Minutes since update is just for display
     const minsSinceUpdate = minutesSince(item.lastUpdatedAt);
     const isLoading = loadingRestaurantId === item.id;
 
@@ -750,9 +738,9 @@ useEffect(() => {
       <RestaurantCard
         restaurant={item}
         minutesSinceUpdate={minsSinceUpdate}
-        minutesSinceCall={minsSinceCall}
-        cooldownMinutes={cooldown}
-        canRequest={isLoading ? false : canRequest}
+        secondsSinceCall={0}
+        cooldownSeconds={0}
+        canRequest={true}
         isLoading={isLoading}
         onRequest={() => handleRequest(item)}
       />
@@ -862,7 +850,7 @@ useEffect(() => {
             data={filtered}
             keyExtractor={(item) => item.id.toString()}
             renderItem={renderItem}
-            extraData={now}
+            // extraData={now} // COOLDOWN DISABLED (today)
             contentContainerStyle={{ paddingBottom: 32 }}
             ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
             refreshControl={

@@ -1,46 +1,74 @@
 import { API_BASE_URL, API_KEY } from "./config";
 import { Restaurant } from "./types";
 
+const CALL_SKIP_MESSAGES: Record<string, string> = {
+  // in_cooldown: disabled for today
+  outside_call_window: "Restaurant is closed or outside calling hours.",
+  do_not_call: "This restaurant cannot be called.",
+  restaurant_not_found: "Restaurant not found.",
+  error: "Could not place call. Please try again.",
+};
+
+export type RequestWaitTimeOptions = {
+  deviceId?: string;
+  pushToken?: string;
+  userLat?: number;
+  userLng?: number;
+};
+
 /**
  * Request wait time for a restaurant (triggers Twilio call)
  */
 export async function requestWaitTime(
   restaurant: Restaurant,
-  partySize = 4
-): Promise<any | null> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/call`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
-      },
-      body: JSON.stringify({
-        restaurant_id: restaurant.id,
-        party_size: partySize,
-        phone: restaurant.phone,
-      }),
-    });
+  partySize = 4,
+  options?: RequestWaitTimeOptions
+): Promise<any> {
+  const body: Record<string, unknown> = {
+    restaurant_id: restaurant.id,
+    party_size: partySize,
+    phone: restaurant.phone,
+  };
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (__DEV__) console.error(`HTTP error ${response.status}:`, errorText);
-      throw new Error(`HTTP error: ${response.status}`);
-    }
+  if (options?.deviceId) body.device_id = options.deviceId;
+  if (options?.pushToken) body.push_token = options.pushToken;
+  if (options?.userLat !== undefined) body.user_lat = options.userLat;
+  if (options?.userLng !== undefined) body.user_lng = options.userLng;
 
-    const data = await response.json();
+  const response = await fetch(`${API_BASE_URL}/call`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
+    },
+    body: JSON.stringify(body),
+  });
 
-    // Handle specific backend responses
-    if (data.skipped && data.reason === "outside_call_window") {
-      throw new Error("Restaurant is outside call window");
-    }
-
-    if (__DEV__) console.log("✅ Wait time request success:", data);
-    return data;
-  } catch (err) {
-    if (__DEV__) console.error("❌ Failed to request wait time:", err);
-    return null;
+  if (!response.ok) {
+    const errorText = await response.text();
+    if (__DEV__) console.error(`HTTP error ${response.status}:`, errorText);
+    throw new Error(`Request failed (${response.status})`);
   }
+
+  const data = await response.json();
+
+  // COOLDOWN DISABLED — never surface in_cooldown to the user
+  if (data.skipped && data.reason === "in_cooldown") {
+    if (__DEV__) {
+      console.warn("Server returned in_cooldown; redeploy backend to place calls. Ignoring skip.");
+    }
+    return { ...data, skipped: false, cooldown_ignored: true };
+  }
+
+  if (data.skipped) {
+    const reason = data.reason || "unknown";
+    const message =
+      CALL_SKIP_MESSAGES[reason] || `Call skipped: ${reason.replace(/_/g, " ")}`;
+    throw new Error(message);
+  }
+
+  if (__DEV__) console.log("✅ Wait time request success:", data);
+  return data;
 }
 
 /**
@@ -76,10 +104,10 @@ export async function fetchAllRestaurants(
     const params = new URLSearchParams();
 
     if (lat !== undefined && lng !== undefined) {
-      params.append('lat', lat.toString());
-      params.append('lng', lng.toString());
+      params.append("lat", lat.toString());
+      params.append("lng", lng.toString());
       if (radius !== undefined) {
-        params.append('radius', radius.toString());
+        params.append("radius", radius.toString());
       }
     }
 
@@ -113,7 +141,6 @@ export async function fetchAllRestaurants(
       isClosed: r.is_closed,
       lastCalledAt: r.last_called_at,
       cooldownMinutes: r.cooldown_minutes,
-      // Location fields
       latitude: r.latitude,
       longitude: r.longitude,
       address: r.address,
