@@ -1,6 +1,12 @@
 import { Restaurant } from "@/utils/types";
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { formatTimeAgo } from "../utils/time";
+
+/** Shown when Google Places photo URLs in the DB are expired or fail to load */
+const FALLBACK_RESTAURANT_IMAGE =
+  "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=200&h=200&fit=crop";
 
 type Props = {
   restaurant: Restaurant;
@@ -22,6 +28,11 @@ export default function RestaurantCard({
   onRequest,
 }: Props) {
   const { name, cuisine, waitMinutes, image, distance_miles, city, state } = restaurant;
+  const [imageUri, setImageUri] = useState(image?.trim() || FALLBACK_RESTAURANT_IMAGE);
+
+  useEffect(() => {
+    setImageUri(image?.trim() || FALLBACK_RESTAURANT_IMAGE);
+  }, [image, restaurant.id]);
 
   // Don't show generic/useless cuisine labels from the backend
   const GENERIC_CUISINES = new Set(["restaurant", "food", "establishment", "point_of_interest", "unknown"]);
@@ -55,8 +66,11 @@ export default function RestaurantCard({
       accessibilityLabel={accessibilityLabel}
     >
       <Image
-        source={{ uri: image }}
+        source={{ uri: imageUri }}
         style={styles.thumb}
+        contentFit="cover"
+        transition={200}
+        onError={() => setImageUri(FALLBACK_RESTAURANT_IMAGE)}
         accessible={true}
         accessibilityLabel={`${name} restaurant photo`}
       />
