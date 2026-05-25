@@ -1,14 +1,6 @@
 import { API_BASE_URL, API_KEY } from "./config";
 import { Restaurant } from "./types";
 
-const CALL_SKIP_MESSAGES: Record<string, string> = {
-  // in_cooldown: disabled for today
-  outside_call_window: "Restaurant is closed or outside calling hours.",
-  do_not_call: "This restaurant cannot be called.",
-  restaurant_not_found: "Restaurant not found.",
-  error: "Could not place call. Please try again.",
-};
-
 export type RequestWaitTimeOptions = {
   deviceId?: string;
   pushToken?: string;
@@ -16,18 +8,26 @@ export type RequestWaitTimeOptions = {
   userLng?: number;
 };
 
+export type CallTriggerResult = {
+  call_sid: string;
+  restaurant_id: number;
+  recommendations?: unknown[];
+};
+
 /**
- * Request wait time for a restaurant (triggers Twilio call)
+ * Request wait time for a restaurant (triggers Twilio call).
+ * Sends force=true so the backend always places the call.
  */
 export async function requestWaitTime(
   restaurant: Restaurant,
   partySize = 4,
   options?: RequestWaitTimeOptions
-): Promise<any> {
+): Promise<CallTriggerResult> {
   const body: Record<string, unknown> = {
     restaurant_id: restaurant.id,
     party_size: partySize,
     phone: restaurant.phone,
+    force: true,
   };
 
   if (options?.deviceId) body.device_id = options.deviceId;
@@ -44,31 +44,37 @@ export async function requestWaitTime(
     body: JSON.stringify(body),
   });
 
+  let data: Record<string, unknown> = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
   if (!response.ok) {
-    const errorText = await response.text();
-    if (__DEV__) console.error(`HTTP error ${response.status}:`, errorText);
-    throw new Error(`Request failed (${response.status})`);
+    const msg =
+      (typeof data.error === "string" && data.error) ||
+      `Request failed (${response.status})`;
+    if (__DEV__) console.error(`HTTP error ${response.status}:`, data);
+    throw new Error(msg);
   }
 
-  const data = await response.json();
-
-  // COOLDOWN DISABLED — never surface in_cooldown to the user
-  if (data.skipped && data.reason === "in_cooldown") {
-    if (__DEV__) {
-      console.warn("Server returned in_cooldown; redeploy backend to place calls. Ignoring skip.");
-    }
-    return { ...data, skipped: false, cooldown_ignored: true };
+  if (typeof data.error === "string") {
+    throw new Error(data.error);
   }
 
-  if (data.skipped) {
-    const reason = data.reason || "unknown";
-    const message =
-      CALL_SKIP_MESSAGES[reason] || `Call skipped: ${reason.replace(/_/g, " ")}`;
-    throw new Error(message);
+  if (typeof data.call_sid !== "string" || !data.call_sid) {
+    if (__DEV__) console.error("Missing call_sid in /call response:", data);
+    throw new Error("Call was not placed. No confirmation from server.");
   }
 
   if (__DEV__) console.log("✅ Wait time request success:", data);
-  return data;
+
+  return {
+    call_sid: data.call_sid,
+    restaurant_id: Number(data.restaurant_id ?? restaurant.id),
+    recommendations: data.recommendations as unknown[] | undefined,
+  };
 }
 
 /**
@@ -138,7 +144,6 @@ export async function fetchAllRestaurants(
       timezone: r.timezone,
       openHour: r.open_hour,
       closeHour: r.close_hour,
-      isClosed: r.is_closed,
       lastCalledAt: r.last_called_at,
       cooldownMinutes: r.cooldown_minutes,
       latitude: r.latitude,
@@ -147,7 +152,6 @@ export async function fetchAllRestaurants(
       city: r.city,
       state: r.state,
       rating: r.rating,
-      price_level: r.price_level,
       distance_miles: r.distance_miles,
     }));
 

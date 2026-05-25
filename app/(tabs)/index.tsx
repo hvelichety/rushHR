@@ -41,42 +41,6 @@ import {
 
 
 
-// --- Mock seed data (replace with API later) ---
-const NOW = Date.now();
-const MIN = 60_000;
-
-// Place types/names that are NOT restaurants — backend imports too broadly from Google Places.
-const NON_RESTAURANT_TYPES = new Set([
-  "bowling_alley", "bowling", "amusement_park", "amusement_center",
-  "golf_course", "mini_golf", "entertainment", "entertainment_center",
-  "spa", "beauty_salon", "hair_salon", "nail_salon", "massage",
-  "gym", "fitness_center", "health",
-  "convenience_store", "gas_station", "grocery_store", "supermarket",
-  "pharmacy", "drug_store",
-  "car_wash", "car_dealer", "car_repair",
-  "hotel", "lodging", "motel",
-  "movie_theater", "theater", "theatre",
-  "museum", "art_gallery",
-  "shopping_mall", "department_store", "clothing_store",
-  "laundry", "storage",
-]);
-
-const NON_RESTAURANT_NAMES = [
-  "wawa", "lucky strike", "topgolf", "top golf", "spa", "sauna",
-  "bowling", "cinemark", "amc theater", "regal cinema",
-  "planet fitness", "la fitness", "anytime fitness", "equinox",
-  "cvs", "walgreens", "rite aid", "target", "walmart", "costco",
-  "marriott", "hilton", "hyatt", "holiday inn", "courtyard",
-];
-
-function isRestaurant(name: string, cuisine: string): boolean {
-  const nameLower = name.toLowerCase();
-  const cuisineLower = cuisine.toLowerCase();
-  if (NON_RESTAURANT_TYPES.has(cuisineLower)) return false;
-  if (NON_RESTAURANT_NAMES.some((n) => nameLower.includes(n))) return false;
-  return true;
-}
-
 export default function HomeScreen() {
   const [query, setQuery] = useState("");
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -85,7 +49,6 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingRestaurantId, setLoadingRestaurantId] = useState<number | null>(null);
   const [selectedCuisine, setSelectedCuisine] = useState<string>("All");
-  const [searchLoading, setSearchLoading] = useState(false);
 
   // Location state
   const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
@@ -104,6 +67,7 @@ export default function HomeScreen() {
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
+  const callInFlightRef = useRef<Set<number>>(new Set());
 
   // Push notifications
   useEffect(() => {
@@ -140,13 +104,6 @@ export default function HomeScreen() {
           setUserLocation(location);
           // Don't default to nearby - let user choose
           setShowNearbyOnly(false);
-
-          // Fire-and-forget coverage check — radius in meters (50,000 = ~31 miles)
-          fetch(`${API_BASE_URL}/restaurants/ensure-coverage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lat: location.latitude, lng: location.longitude, radius: 50000 }),
-          }).catch(() => {});
         }
       } else {
         console.warn("⚠️ Location permission denied");
@@ -205,7 +162,6 @@ export default function HomeScreen() {
           timezone: r.timezone,
           openHour: r.open_hour,
           closeHour: r.close_hour,
-          isClosed: r.is_closed,
           lastCalledAt: r.last_called_at,
           cooldownMinutes: r.cooldown_minutes,
           // Location fields
@@ -215,7 +171,6 @@ export default function HomeScreen() {
           city: r.city,
           state: r.state,
           rating: r.rating,
-          price_level: r.price_level,
           distance_miles: r.distance_miles,
         }));
 
@@ -235,7 +190,6 @@ export default function HomeScreen() {
             return {
               ...existing,
               waitMinutes: apiR.waitMinutes ?? existing.waitMinutes,
-              isClosed: apiR.isClosed,
               openHour: apiR.openHour,
               closeHour: apiR.closeHour,
               lastCalledAt,
@@ -319,7 +273,6 @@ export default function HomeScreen() {
           timezone: r.timezone,
           openHour: r.open_hour,
           closeHour: r.close_hour,
-          isClosed: r.is_closed,
           lastCalledAt: r.last_called_at,
           cooldownMinutes: r.cooldown_minutes,
           // Location fields
@@ -329,7 +282,6 @@ export default function HomeScreen() {
           city: r.city,
           state: r.state,
           rating: r.rating,
-          price_level: r.price_level,
           distance_miles: r.distance_miles,
         }));
 
@@ -381,11 +333,10 @@ useEffect(() => {
 
             if (
               latest.wait_minutes !== r.waitMinutes ||
-              latest.is_closed !== r.isClosed ||
               latest.last_called_at !== r.lastCalledAt
             ) {
               console.log(`⚡ ${r.name} updated → ${latest.wait_minutes} min`);
-              return { ...r, waitMinutes: latest.wait_minutes, isClosed: latest.is_closed, lastCalledAt: latest.last_called_at };
+              return { ...r, waitMinutes: latest.wait_minutes, lastCalledAt: latest.last_called_at };
             }
             return r;
           })
@@ -463,7 +414,6 @@ useEffect(() => {
         timezone: r.timezone,
         openHour: r.open_hour,
         closeHour: r.close_hour,
-        isClosed: r.is_closed,
         lastCalledAt: r.last_called_at,
         cooldownMinutes: r.cooldown_minutes,
         // Location fields
@@ -473,7 +423,6 @@ useEffect(() => {
         city: r.city,
         state: r.state,
         rating: r.rating,
-        price_level: r.price_level,
         distance_miles: r.distance_miles,
       }));
 
@@ -531,15 +480,10 @@ useEffect(() => {
     let result = restaurants;
     const q = query.trim().toLowerCase();
 
-    // Strip non-restaurants from the list (backend imports too broadly from Google Places)
-    result = result.filter((r) => isRestaurant(r.name, r.cuisine || ""));
-
-    // Apply cuisine filter
     if (selectedCuisine !== "All") {
       result = result.filter((r) => r.cuisine === selectedCuisine);
     }
 
-    // Apply nearby filter (explicit toggle, tighter radius)
     if (showNearbyOnly && userLocation) {
       result = result.filter((r) =>
         r.distance_miles !== undefined &&
@@ -548,9 +492,6 @@ useEffect(() => {
       );
     }
 
-    // Default 30-mile radius filter when location is known and no search query.
-    // Restaurants with no distance data are excluded — they can't be verified nearby.
-    // Search bypasses this so users can explicitly find distant restaurants.
     if (!q && userLocation) {
       result = result.filter((r) =>
         r.distance_miles !== undefined &&
@@ -559,94 +500,26 @@ useEffect(() => {
       );
     }
 
-    // Apply search filter — name only, not cuisine (cuisine has the dedicated filter above)
     if (q) {
-      result = result.filter((r) => r.name.toLowerCase().includes(q));
+      result = result.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          (r.cuisine && r.cuisine.toLowerCase().includes(q))
+      );
     }
 
     return result;
   }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
 
-  // Remote search fallback: 4+ chars and fewer than 3 local results
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 4 || filtered.length >= 3) return;
-
-    const timer = setTimeout(async () => {
-      setSearchLoading(true);
-      try {
-        let searchUrl = `${API_BASE_URL}/restaurants/search?q=${encodeURIComponent(q)}`;
-        if (userLocation) {
-          searchUrl += `&lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
-        }
-        const res = await fetch(searchUrl);
-        if (!res.ok) return;
-        const raw = await res.json();
-        const arr = Array.isArray(raw) ? raw : (raw.data || raw.restaurants || []);
-        if (!arr.length) return;
-
-        const mapped: Restaurant[] = arr.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          cuisine: r.cuisine || "Unknown",
-          phone: r.phone,
-          waitMinutes: r.wait_minutes,
-          lastUpdatedAt: r.last_updated_at < 1e12 ? r.last_updated_at * 1000 : r.last_updated_at,
-          image: r.image || 'https://via.placeholder.com/150',
-          timezone: r.timezone,
-          openHour: r.open_hour,
-          closeHour: r.close_hour,
-          isClosed: r.is_closed,
-          lastCalledAt: r.last_called_at,
-          cooldownMinutes: r.cooldown_minutes,
-          latitude: r.latitude,
-          longitude: r.longitude,
-          address: r.address,
-          city: r.city,
-          state: r.state,
-          rating: r.rating,
-          price_level: r.price_level,
-          distance_miles: r.distance_miles,
-        }));
-
-        setRestaurants(prev => {
-          const existingIds = new Set(prev.map(x => x.id));
-          const newOnes = mapped.filter(r =>
-            !existingIds.has(r.id) && isRestaurant(r.name, r.cuisine || "")
-          );
-          return newOnes.length ? [...prev, ...newOnes] : prev;
-        });
-      } catch {
-        // silent — search fallback failures are non-critical
-      } finally {
-        setSearchLoading(false);
-      }
-    }, 400);
-
-    return () => clearTimeout(timer);
-  }, [query, filtered.length, userLocation]);
-
-  // Request handler with haptics and toasts
   const handleRequest = async (r: Restaurant) => {
-    // Set loading state
+    if (callInFlightRef.current.has(r.id)) {
+      return;
+    }
+    callInFlightRef.current.add(r.id);
     setLoadingRestaurantId(r.id);
-
-    // Haptic feedback
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    // 1️⃣ Open the popup immediately
-    setRequested(r);
-    setModalOpen(true);
-
-    // Pick 2–3 random recommendations
-    const recs = restaurants
-      .filter(x => x.id !== r.id)
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 3);
-    setRecommendations(recs);
-
     try {
-      // 2️⃣ Trigger backend Twilio call
       const res = await requestWaitTime(r, 4, {
         deviceId: deviceIdRef.current ?? undefined,
         pushToken: pushTokenRef.current ?? undefined,
@@ -654,14 +527,16 @@ useEffect(() => {
         userLng: userLocation?.longitude,
       });
 
-      console.log("✅ Call triggered:", res);
+      console.log("✅ Call triggered:", res.call_sid, res);
 
-      // COOLDOWN DISABLED (today)
-      // setRestaurants(prev =>
-      //   prev.map(x =>
-      //     x.id === r.id ? { ...x, lastCalledAt: new Date().toISOString() } : x
-      //   )
-      // );
+      setRequested(r);
+      setRecommendations(
+        restaurants
+          .filter((x) => x.id !== r.id)
+          .sort(() => 0.5 - Math.random())
+          .slice(0, 3)
+      );
+      setModalOpen(true);
 
       Toast.show({
         type: 'success',
@@ -670,7 +545,6 @@ useEffect(() => {
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // 4️⃣ After 5s, poll backend for the updated wait time and lastCalledAt
       setTimeout(async () => {
         console.log("🔍 Fetching restaurant ID:", r.id);
         const latest = await fetchRestaurant(Number(r.id));
@@ -688,12 +562,6 @@ useEffect(() => {
                         ? latest.wait_minutes
                         : x.waitMinutes,
                     lastUpdatedAt: Date.now(),
-                    // COOLDOWN DISABLED (today)
-                    // lastCalledAt: latest.last_called_at || x.lastCalledAt,
-                    // cooldownMinutes: resolveCooldownMinutes(
-                    //   latest.cooldown_minutes,
-                    //   resolveCooldownMinutes(x.cooldownMinutes)
-                    // ),
                   }
                 : x
             )
@@ -720,9 +588,11 @@ useEffect(() => {
         err instanceof Error ? err.message : "Please try again";
       Toast.show({
         type: 'error',
-        text1: 'Request failed',
+        text1: 'Call not placed',
         text2: message,
       });
+    } finally {
+      callInFlightRef.current.delete(r.id);
     }
   };  
 
@@ -784,15 +654,8 @@ useEffect(() => {
             placeholderTextColor="#94A3B8"
             value={query}
             onChangeText={setQuery}
-            style={[styles.search, { flex: 1 }]}
+            style={styles.search}
           />
-          {searchLoading && (
-            <ActivityIndicator
-              size="small"
-              color="#F45B5B"
-              style={styles.searchSpinner}
-            />
-          )}
         </View>
 
         {/* Debug info */}
@@ -941,11 +804,9 @@ const styles = StyleSheet.create({
     borderColor: "#E2E8F0",
   },
   search: {
+    flex: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
-  },
-  searchSpinner: {
-    paddingRight: 12,
   },
   debug: {
     fontSize: 11,

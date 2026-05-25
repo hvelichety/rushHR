@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { formatTimeAgo } from "../utils/time";
 
-/** Shown when Google Places photo URLs in the DB are expired or fail to load */
+/** Fallback when restaurant photo URLs fail to load */
 const FALLBACK_RESTAURANT_IMAGE =
   "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=200&h=200&fit=crop";
 
@@ -48,16 +48,9 @@ export default function RestaurantCard({
   // }
   const isAvailable = true;
 
-  const isClosed = restaurant.isClosed;
+  const accessibilityLabel = `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, ${waitMinutes > 0 ? `${waitMinutes} minute wait` : "no wait"}, updated ${formatTimeAgo(minutesSinceUpdate)}`;
 
-  // ✅ Accessibility support
-  const accessibilityLabel = isClosed
-    ? `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, Closed`
-    : `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, ${waitMinutes} minute wait, updated ${formatTimeAgo(minutesSinceUpdate)}`;
-
-  const buttonAccessibilityLabel = isClosed
-    ? `${name} is closed`
-    : `Request wait time for ${name}`;
+  const buttonAccessibilityLabel = `Request wait time for ${name}`;
 
   return (
     <View
@@ -116,18 +109,18 @@ export default function RestaurantCard({
 
         <Pressable
           onPress={onRequest}
-          disabled={isClosed || isLoading}
+          disabled={isLoading}
           accessible={true}
           accessibilityLabel={buttonAccessibilityLabel}
           accessibilityRole="button"
           accessibilityState={{
-            disabled: isClosed || isLoading,
+            disabled: isLoading,
             busy: isLoading,
           }}
           style={({ pressed }) => [
             styles.button,
-            (isClosed || isLoading) && styles.buttonDisabled,
-            pressed && !isClosed && !isLoading && styles.buttonPressed,
+            isLoading && styles.buttonDisabled,
+            pressed && !isLoading && styles.buttonPressed,
           ]}
         >
           {isLoading ? (
@@ -138,14 +131,8 @@ export default function RestaurantCard({
               </Text>
             </View>
           ) : (
-            <Text
-              style={[
-                styles.buttonText,
-                isClosed && styles.buttonTextDisabled,
-              ]}
-              numberOfLines={1}
-            >
-              {isClosed ? "Closed 🌙" : "Request Wait Time"}
+            <Text style={styles.buttonText} numberOfLines={1}>
+              Request Wait Time
             </Text>
           )}
         </Pressable>

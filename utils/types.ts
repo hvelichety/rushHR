@@ -8,7 +8,6 @@ export type Restaurant = {
   image: string;
   phone: string;
   timezone?: string;
-  isClosed?: boolean;
   openHour?: number;
   closeHour?: number;
   lastCalledAt?: string;
@@ -20,6 +19,5 @@ export type Restaurant = {
   city?: string;
   state?: string;
   rating?: number;
-  price_level?: number;
   distance_miles?: number; // Calculated by backend
 };
