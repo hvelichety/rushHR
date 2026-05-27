@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { API_BASE_URL } from './config';
 
@@ -67,10 +68,16 @@ export async function registerForPushNotifications(): Promise<string | null> {
       return null;
     }
 
-    // Get the push token
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: '4a68bf21-2b3f-4732-9f77-cf9edd46e27f', // Replace with your Expo project ID
-    });
+    // Get the push token.
+    // In EAS builds, this must match your Expo project's "projectId".
+    // In Expo Go/dev, omit projectId if it's not configured to avoid hard failures.
+    const projectId =
+      (Constants.easConfig as any)?.projectId ||
+      (Constants.expoConfig as any)?.extra?.eas?.projectId;
+
+    const tokenData = projectId
+      ? await Notifications.getExpoPushTokenAsync({ projectId })
+      : await Notifications.getExpoPushTokenAsync();
 
     const token = tokenData.data;
     console.log('🔔 Push token:', token);
@@ -87,7 +94,8 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
     return token;
   } catch (error) {
-    console.error('Error registering for push notifications:', error);
+    // Don't red-screen the app if Expo's push service is temporarily unavailable.
+    console.warn('Push notifications unavailable:', error);
     return null;
   }
 }
