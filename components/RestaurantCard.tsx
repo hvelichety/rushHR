@@ -109,18 +109,15 @@ export default function RestaurantCard({
 
         <Pressable
           onPress={onRequest}
-          disabled={isLoading}
           accessible={true}
           accessibilityLabel={buttonAccessibilityLabel}
           accessibilityRole="button"
           accessibilityState={{
-            disabled: isLoading,
             busy: isLoading,
           }}
           style={({ pressed }) => [
             styles.button,
-            isLoading && styles.buttonDisabled,
-            pressed && !isLoading && styles.buttonPressed,
+            pressed && styles.buttonPressed,
           ]}
         >
           {isLoading ? (

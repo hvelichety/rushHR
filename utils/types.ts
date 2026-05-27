@@ -11,7 +11,6 @@ export type Restaurant = {
   openHour?: number;
   closeHour?: number;
   lastCalledAt?: string;
-  cooldownMinutes?: number;
   // Location fields
   latitude?: number;
   longitude?: number;

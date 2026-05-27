@@ -145,7 +145,6 @@ export async function fetchAllRestaurants(
       openHour: r.open_hour,
       closeHour: r.close_hour,
       lastCalledAt: r.last_called_at,
-      cooldownMinutes: r.cooldown_minutes,
       latitude: r.latitude,
       longitude: r.longitude,
       address: r.address,

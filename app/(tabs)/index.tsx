@@ -1,6 +1,5 @@
 import { EventSourcePolyfill } from "event-source-polyfill";
 import { useEffect, useMemo, useRef, useState } from "react";
-// import { resolveCooldownMinutes } from "../../utils/cooldown"; // COOLDOWN DISABLED (today)
 import {
   FlatList,
   SafeAreaView,
@@ -67,7 +66,7 @@ export default function HomeScreen() {
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
-  const callInFlightRef = useRef<Set<number>>(new Set());
+  // Cooldown disabled: every tap triggers a call request
 
   // Push notifications
   useEffect(() => {
@@ -163,7 +162,6 @@ export default function HomeScreen() {
           openHour: r.open_hour,
           closeHour: r.close_hour,
           lastCalledAt: r.last_called_at,
-          cooldownMinutes: r.cooldown_minutes,
           // Location fields
           latitude: r.latitude,
           longitude: r.longitude,
@@ -193,7 +191,6 @@ export default function HomeScreen() {
               openHour: apiR.openHour,
               closeHour: apiR.closeHour,
               lastCalledAt,
-              cooldownMinutes: apiR.cooldownMinutes,
               lastUpdatedAt: existing.lastUpdatedAt,
             };
           })
@@ -274,7 +271,6 @@ export default function HomeScreen() {
           openHour: r.open_hour,
           closeHour: r.close_hour,
           lastCalledAt: r.last_called_at,
-          cooldownMinutes: r.cooldown_minutes,
           // Location fields
           latitude: r.latitude,
           longitude: r.longitude,
@@ -415,7 +411,6 @@ useEffect(() => {
         openHour: r.open_hour,
         closeHour: r.close_hour,
         lastCalledAt: r.last_called_at,
-        cooldownMinutes: r.cooldown_minutes,
         // Location fields
         latitude: r.latitude,
         longitude: r.longitude,
@@ -427,7 +422,7 @@ useEffect(() => {
       }));
 
       // Merge with existing state — the list endpoint may return null for
-      // last_called_at and cooldown_minutes, so always prefer local state for those.
+      // last_called_at, so always prefer local state for that.
       setRestaurants(prev => {
         const prevMap = new Map(prev.map(x => [x.id, x]));
         return data.map(r => {
@@ -446,10 +441,7 @@ useEffect(() => {
             ? (r.lastCalledAt || existing.lastCalledAt)
             : existing.lastCalledAt;
 
-          // Prefer local cooldownMinutes if backend returns null/undefined
-          const cooldownMinutes = r.cooldownMinutes ?? existing.cooldownMinutes;
-
-          return { ...r, lastCalledAt, cooldownMinutes };
+          return { ...r, lastCalledAt };
         });
       });
       Toast.show({
@@ -512,10 +504,6 @@ useEffect(() => {
   }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
 
   const handleRequest = async (r: Restaurant) => {
-    if (callInFlightRef.current.has(r.id)) {
-      return;
-    }
-    callInFlightRef.current.add(r.id);
     setLoadingRestaurantId(r.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
@@ -591,16 +579,10 @@ useEffect(() => {
         text1: 'Call not placed',
         text2: message,
       });
-    } finally {
-      callInFlightRef.current.delete(r.id);
     }
   };  
 
   const renderItem = ({ item }: { item: Restaurant }) => {
-    // COOLDOWN DISABLED (today)
-  // const cooldownMins = resolveCooldownMinutes(item.cooldownMinutes);
-  // ... lastCalledAt / canRequest logic ...
-
     const minsSinceUpdate = minutesSince(item.lastUpdatedAt);
     const isLoading = loadingRestaurantId === item.id;
 
