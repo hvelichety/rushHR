@@ -484,12 +484,18 @@ useEffect(() => {
       );
     }
 
+    // Default radius when location is on — but keep all restaurants if none are in range
+    // (avoids "No restaurants available" when user is far from the curated list).
     if (!q && userLocation) {
-      result = result.filter((r) =>
-        r.distance_miles !== undefined &&
-        r.distance_miles !== null &&
-        r.distance_miles <= 30
+      const withinRadius = result.filter(
+        (r) =>
+          r.distance_miles !== undefined &&
+          r.distance_miles !== null &&
+          r.distance_miles <= 30
       );
+      if (withinRadius.length > 0) {
+        result = withinRadius;
+      }
     }
 
     if (q) {

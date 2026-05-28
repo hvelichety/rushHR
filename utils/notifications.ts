@@ -1,11 +1,15 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { API_BASE_URL } from './config';
 
-const DEVICE_ID_KEY = '@RushHR:deviceId';
+// In-memory device ID (AsyncStorage native module is unreliable in some Expo Go setups)
+let cachedDeviceId: string | null = null;
+
+function createDeviceId(): string {
+  return `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
 
 // Configure notification behavior
 Notifications.setNotificationHandler({
@@ -19,28 +23,14 @@ Notifications.setNotificationHandler({
 });
 
 /**
- * Get or create a unique device ID
+ * Get or create a unique device ID (session-stable, no native storage required)
  */
 export async function getDeviceId(): Promise<string> {
-  try {
-    // Check if we already have a device ID stored
-    let deviceId = await AsyncStorage.getItem(DEVICE_ID_KEY);
-
-    if (!deviceId) {
-      // Generate a new unique device ID
-      deviceId = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      await AsyncStorage.setItem(DEVICE_ID_KEY, deviceId);
-      console.log('📱 Generated new device ID:', deviceId);
-    } else {
-      console.log('📱 Retrieved existing device ID:', deviceId);
-    }
-
-    return deviceId;
-  } catch (error) {
-    console.error('Error getting device ID:', error);
-    // Fallback to a temporary ID
-    return `${Platform.OS}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  if (!cachedDeviceId) {
+    cachedDeviceId = createDeviceId();
+    if (__DEV__) console.log('📱 Device ID:', cachedDeviceId);
   }
+  return cachedDeviceId;
 }
 
 /**
@@ -48,13 +38,11 @@ export async function getDeviceId(): Promise<string> {
  */
 export async function registerForPushNotifications(): Promise<string | null> {
   try {
-    // Check if running on a physical device
     if (!Device.isDevice) {
       console.warn('⚠️ Push notifications only work on physical devices');
       return null;
     }
 
-    // Request permissions
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
@@ -68,21 +56,19 @@ export async function registerForPushNotifications(): Promise<string | null> {
       return null;
     }
 
-    // Get the push token.
-    // In EAS builds, this must match your Expo project's "projectId".
-    // In Expo Go/dev, omit projectId if it's not configured to avoid hard failures.
     const projectId =
-      (Constants.easConfig as any)?.projectId ||
-      (Constants.expoConfig as any)?.extra?.eas?.projectId;
+      (Constants.easConfig as { projectId?: string } | null)?.projectId ||
+      (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas
+        ?.projectId;
 
-    const tokenData = projectId
-      ? await Notifications.getExpoPushTokenAsync({ projectId })
-      : await Notifications.getExpoPushTokenAsync();
+    const tokenData =
+      projectId && projectId !== 'YOUR_EAS_PROJECT_ID'
+        ? await Notifications.getExpoPushTokenAsync({ projectId })
+        : await Notifications.getExpoPushTokenAsync();
 
     const token = tokenData.data;
-    console.log('🔔 Push token:', token);
+    if (__DEV__) console.log('🔔 Push token:', token);
 
-    // Configure notification channel for Android
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'default',
@@ -94,7 +80,6 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
     return token;
   } catch (error) {
-    // Don't red-screen the app if Expo's push service is temporarily unavailable.
     console.warn('Push notifications unavailable:', error);
     return null;
   }
@@ -123,7 +108,7 @@ export async function registerPushToken(deviceId: string, pushToken: string): Pr
     }
 
     const data = await response.json();
-    console.log('✅ Push token registered with backend:', data);
+    if (__DEV__) console.log('✅ Push token registered with backend:', data);
   } catch (error) {
     console.error('Error registering push token with backend:', error);
   }
@@ -131,34 +116,26 @@ export async function registerPushToken(deviceId: string, pushToken: string): Pr
 
 /**
  * Setup notification listeners
- * @param onNotificationTap - Callback when user taps a notification
- * @returns Cleanup function to remove listeners
  */
 export function setupNotificationListeners(
-  onNotificationTap: (data: any) => void
+  onNotificationTap: (data: Record<string, unknown>) => void
 ): () => void {
-  // Handle notification received while app is in foreground
   const receivedSubscription = Notifications.addNotificationReceivedListener(notification => {
-    console.log('🔔 Notification received:', notification);
+    if (__DEV__) console.log('🔔 Notification received:', notification);
   });
 
-  // Handle notification tapped/clicked
   const responseSubscription = Notifications.addNotificationResponseReceivedListener(response => {
-    console.log('👆 Notification tapped:', response);
+    if (__DEV__) console.log('👆 Notification tapped:', response);
     const data = response.notification.request.content.data;
-    onNotificationTap(data);
+    onNotificationTap(data as Record<string, unknown>);
   });
 
-  // Return cleanup function
   return () => {
     receivedSubscription.remove();
     responseSubscription.remove();
   };
 }
 
-/**
- * Check if push notifications are enabled
- */
 export async function arePushNotificationsEnabled(): Promise<boolean> {
   if (!Device.isDevice) {
     return false;
