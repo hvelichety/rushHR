@@ -6,7 +6,7 @@ const IS_DEV = __DEV__;
 const IS_SIMULATOR = Platform.OS === 'ios' ? !Constants.isDevice : false;
 const IS_EMULATOR = Platform.OS === 'android' ? !Constants.isDevice : false;
 
-// ✅ Development URLs (for simulator/emulator)
+// ✅  Development URLs (for simulator/emulator)
 const DEV_URLS = {
   ios: 'http://localhost:5001', // iOS Simulator → localhost
   android: 'http://10.0.2.2:5001', // Android Emulator → special IP
@@ -26,6 +26,9 @@ function getApiUrl(): string {
 
 export const API_BASE_URL = getApiUrl();
 export const API_KEY = process.env.EXPO_PUBLIC_API_KEY;
+
+/** Must match backend: only applied when "Nearby Only" filter is on (query param radius=) */
+export const NEARBY_RADIUS_MILES = 30;
 
 // ✅ Validate API URL and key on app start
 export function validateApiUrl(): boolean {

@@ -131,7 +131,7 @@ export default function FilterModal({
                     {tempNearby && <View style={styles.radioDot} />}
                   </View>
                   <Text style={styles.radioLabel}>Nearby Only</Text>
-                  <Text style={styles.radioHint}> (within 10 mi)</Text>
+                  <Text style={styles.radioHint}> (within 30 mi)</Text>
                 </TouchableOpacity>
               </View>
             </>

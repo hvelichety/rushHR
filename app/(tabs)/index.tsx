@@ -20,7 +20,7 @@ import FilterModal from "../../components/FilterModal";
 import RequestModal from "../../components/RequestModal";
 import RestaurantCard from "../../components/RestaurantCard";
 import { fetchRestaurant, requestWaitTime } from "../../utils/api";
-import { API_BASE_URL } from "../../utils/config";
+import { API_BASE_URL, NEARBY_RADIUS_MILES } from "../../utils/config";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
 const EventSource = EventSourcePolyfill;
@@ -30,6 +30,23 @@ import {
   requestLocationPermission,
   UserLocation,
 } from "../../utils/location";
+
+/** lat/lng for distance; radius=30 only when "Nearby Only" — backend returns all restaurants otherwise */
+function buildRestaurantsUrl(
+  userLocation: UserLocation | null,
+  showNearbyOnly: boolean
+): string {
+  let url = `${API_BASE_URL}/restaurants`;
+  if (!userLocation) return url;
+  const params = new URLSearchParams({
+    lat: String(userLocation.latitude),
+    lng: String(userLocation.longitude),
+  });
+  if (showNearbyOnly) {
+    params.set("radius", String(NEARBY_RADIUS_MILES));
+  }
+  return `${url}?${params.toString()}`;
+}
 
 import {
   getDeviceId,
@@ -133,11 +150,7 @@ export default function HomeScreen() {
     const interval = setInterval(async () => {
       console.log("🔁 Refreshing restaurant data...");
       try {
-        let url = `${API_BASE_URL}/restaurants`;
-        if (userLocation) {
-          url += `?lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
-          if (showNearbyOnly) url += `&radius=50`;
-        }
+        const url = buildRestaurantsUrl(userLocation, showNearbyOnly);
 
         const res = await fetch(url);
         if (!res.ok) {
@@ -215,14 +228,8 @@ export default function HomeScreen() {
 
         // Always pass lat/lng when available so backend computes distance_miles.
         // radius param only applied when showNearbyOnly is active.
-        let url = `${API_BASE_URL}/restaurants`;
-        if (userLocation) {
-          url += `?lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
-          if (showNearbyOnly) url += `&radius=50`;
-          console.log("📡 Fetching with location:", url);
-        } else {
-          console.log("📡 Fetching all restaurants (no location):", url);
-        }
+        const url = buildRestaurantsUrl(userLocation, showNearbyOnly);
+        console.log("📡 Fetching restaurants:", url);
 
         const res = await fetch(url);
 
@@ -377,12 +384,8 @@ useEffect(() => {
         console.log("🔄 Location refreshed:", location);
       }
 
-      let url = `${API_BASE_URL}/restaurants`;
       const currentLocation = location || userLocation;
-      if (currentLocation) {
-        url += `?lat=${currentLocation.latitude}&lng=${currentLocation.longitude}`;
-        if (showNearbyOnly) url += `&radius=50`;
-      }
+      const url = buildRestaurantsUrl(currentLocation, showNearbyOnly);
 
       const res = await fetch(url);
 
@@ -477,25 +480,12 @@ useEffect(() => {
     }
 
     if (showNearbyOnly && userLocation) {
-      result = result.filter((r) =>
-        r.distance_miles !== undefined &&
-        r.distance_miles !== null &&
-        r.distance_miles <= 10
-      );
-    }
-
-    // Default radius when location is on — but keep all restaurants if none are in range
-    // (avoids "No restaurants available" when user is far from the curated list).
-    if (!q && userLocation) {
-      const withinRadius = result.filter(
+      result = result.filter(
         (r) =>
           r.distance_miles !== undefined &&
           r.distance_miles !== null &&
-          r.distance_miles <= 30
+          r.distance_miles <= NEARBY_RADIUS_MILES
       );
-      if (withinRadius.length > 0) {
-        result = withinRadius;
-      }
     }
 
     if (q) {
