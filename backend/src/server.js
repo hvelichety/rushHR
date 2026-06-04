@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { initDb } from './db.js';
+import { initDb, pingDb } from './db.js';
 import {
   getLocations,
   getLocation,
@@ -51,12 +51,27 @@ setInterval(async () => {
 }, 5000);
 
 app.get('/health', async (_req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'rushhr-queue',
-    database: 'postgres',
-    source: 'restaurants table on Railway',
-  });
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({
+      status: 'error',
+      service: 'rushhr-queue',
+      error: 'DATABASE_URL is not set on this Railway service',
+    });
+  }
+  try {
+    await pingDb();
+    res.json({
+      status: 'ok',
+      service: 'rushhr-queue',
+      database: 'connected',
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: 'error',
+      service: 'rushhr-queue',
+      error: err.message,
+    });
+  }
 });
 
 app.get('/locations', async (req, res) => {
@@ -242,8 +257,11 @@ app.delete('/notifications/pending', (req, res) => {
   res.json({ cleared: true });
 });
 
-await initDb();
-
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Queue API listening on port ${PORT} (Postgres)`);
+  console.log(`🚀 Queue API listening on port ${PORT}`);
+  if (!process.env.DATABASE_URL) {
+    console.error('❌ DATABASE_URL is not set — add it in Railway Variables');
+    return;
+  }
+  initDb().catch((err) => console.error('❌ Database init failed:', err.message));
 });

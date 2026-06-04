@@ -42,8 +42,15 @@ Restart Expo (`npm start` → press `r` to reload).
 
 No need for `npm run queue:backend` on your Mac anymore once Railway is working.
 
-## Troubleshooting
+### Healthcheck failed?
 
-- **502 / crash on start**: Check deploy logs — usually missing `DATABASE_URL`.
-- **Empty locations**: Run health check; migrations run automatically on startup.
-- **Phone can't connect**: Use the public Railway HTTPS URL, not `localhost`.
+Almost always **`DATABASE_URL` is missing** on this service.
+
+1. Open your **Postgres** service → **Variables** → copy `DATABASE_URL`  
+   OR use **Add Reference Variable** on the queue service.
+2. On the **queue service** → **Variables** → **New Variable**  
+   - Name: `DATABASE_URL`  
+   - Value: `${{ Postgres.DATABASE_URL }}` (pick your Postgres service from the dropdown)
+3. Redeploy.
+
+Check **Deploy Logs** for `DATABASE_URL is not set` or `Database init failed`.
