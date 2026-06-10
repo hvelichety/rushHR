@@ -122,7 +122,7 @@ async function getRestaurantById(restaurantId) {
 
 export async function getVoiceCall(callId) {
   const { rows } = await query(
-    `SELECT vc.*, r.phone AS restaurant_phone
+    `SELECT vc.*, r.name AS restaurant_name, r.phone AS restaurant_phone
      FROM voice_calls vc
      JOIN restaurants r ON r.id = vc.restaurant_id
      WHERE vc.id = $1`,
@@ -130,9 +130,17 @@ export async function getVoiceCall(callId) {
   );
   if (!rows[0]) return null;
 
+  const restaurantName = rows[0].restaurant_name;
+  const restaurantPhone = rows[0].restaurant_phone;
+
   let row = rows[0];
   if (row.status === 'dialing' || row.status === 'in_progress') {
     row = (await syncVoiceCallFromVapi(row)) ?? row;
+  }
+
+  // syncVoiceCallFromVapi returns voice_calls rows without the join
+  if (row && !row.restaurant_name) {
+    row = { ...row, restaurant_name: restaurantName, restaurant_phone: restaurantPhone };
   }
 
   const mapped = mapVoiceCall(row);
@@ -591,7 +599,11 @@ export async function createVoiceCall({
 
   console.log(`📞 Vapi call started: ${vapiCallId} → ${destinationPhone}`);
 
-  return { ...mapVoiceCall(updatedRows[0]), destinationPhone, fromPhoneNumber: vapiConfig.fromPhoneNumber };
+  return {
+    ...mapVoiceCall(updatedRows[0], { restaurantName: restaurant.name }),
+    destinationPhone,
+    fromPhoneNumber: vapiConfig.fromPhoneNumber,
+  };
 }
 
 function pickTranscript(message) {
