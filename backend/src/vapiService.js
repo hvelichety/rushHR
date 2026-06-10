@@ -25,11 +25,12 @@ function formatVapiError(data) {
   }
 }
 
-function mapVoiceCall(row) {
+function mapVoiceCall(row, extras = {}) {
   if (!row) return null;
   return {
     id: row.id,
     restaurantId: row.restaurant_id,
+    restaurantName: extras.restaurantName ?? row.restaurant_name ?? null,
     questionForRestaurant: row.question_for_restaurant,
     status: row.status,
     vapiCallId: row.vapi_call_id,
@@ -108,6 +109,26 @@ export async function getVoiceCall(callId) {
   const mapped = mapVoiceCall(row);
   const destinationPhone = formatPhoneE164(row.restaurant_phone);
   return destinationPhone ? { ...mapped, destinationPhone } : mapped;
+}
+
+export async function getVoiceCallsForDevice(deviceId, limit = 25) {
+  if (!deviceId?.trim()) return [];
+
+  const { rows } = await query(
+    `SELECT vc.*, r.name AS restaurant_name, r.phone AS restaurant_phone
+     FROM voice_calls vc
+     JOIN restaurants r ON r.id = vc.restaurant_id
+     WHERE vc.device_id = $1
+     ORDER BY vc.created_at DESC
+     LIMIT $2`,
+    [deviceId.trim(), limit]
+  );
+
+  return rows.map((row) => {
+    const mapped = mapVoiceCall(row);
+    const destinationPhone = formatPhoneE164(row.restaurant_phone);
+    return destinationPhone ? { ...mapped, destinationPhone } : mapped;
+  });
 }
 
 function sleep(ms) {

@@ -3,6 +3,7 @@ export type VoiceCallStatus = 'dialing' | 'in_progress' | 'completed' | 'failed'
 export type VoiceCall = {
   id: number;
   restaurantId: number;
+  restaurantName?: string | null;
   questionForRestaurant: string;
   status: VoiceCallStatus;
   vapiCallId?: string | null;

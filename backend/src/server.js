@@ -25,7 +25,7 @@ import {
   enqueueNotifications,
   getPendingNotificationsForDevice,
 } from './notificationQueue.js';
-import { createVoiceCall, getVoiceCall, handleVapiWebhook } from './vapiService.js';
+import { createVoiceCall, getVoiceCall, getVoiceCallsForDevice, handleVapiWebhook } from './vapiService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -66,6 +66,18 @@ app.post('/calls', async (req, res) => {
     const body = { error: err.message };
     if (err.vapiDetails) body.vapiDetails = err.vapiDetails;
     res.status(400).json(body);
+  }
+});
+
+app.get('/calls', async (req, res) => {
+  try {
+    const { deviceId } = req.query;
+    if (!deviceId || typeof deviceId !== 'string') {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+    res.json(await getVoiceCallsForDevice(deviceId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

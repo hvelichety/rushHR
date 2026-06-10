@@ -20,6 +20,7 @@ import AskRestaurantModal from "../../components/AskRestaurantModal";
 import FilterModal from "../../components/FilterModal";
 import RequestModal from "../../components/RequestModal";
 import RestaurantCard from "../../components/RestaurantCard";
+import UpdatesFeed from "../../components/UpdatesFeed";
 import { fetchRestaurant } from "../../utils/api";
 import { createRestaurantCall, fetchVoiceCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
 import { API_BASE_URL, NEARBY_RADIUS_MILES } from "../../utils/config";
@@ -57,6 +58,8 @@ import {
   setupNotificationListeners,
 } from "../../utils/notifications";
 import { handledVoiceCallIds, useQueueNotifications } from "../../hooks/useQueueNotifications";
+import { useCallUpdates } from "../../hooks/useCallUpdates";
+import { CallUpdate } from "../../utils/callUpdates";
 
 
 
@@ -94,6 +97,13 @@ export default function HomeScreen() {
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const {
+    updates: callUpdates,
+    loading: updatesLoading,
+    refreshUpdates,
+    upsertCall,
+    markRead,
+  } = useCallUpdates(deviceId);
   // Cooldown disabled: every tap triggers a call request
 
   const mapApiRestaurant = useCallback((r: Record<string, unknown>): Restaurant => ({
@@ -125,6 +135,8 @@ export default function HomeScreen() {
     try {
       const result = await fetchVoiceCall(callId);
       handledVoiceCallIds.add(callId);
+      markRead(callId);
+      upsertCall(result);
 
       let restaurant =
         restaurants.find((x) => x.id === result.restaurantId) ?? null;
@@ -160,7 +172,15 @@ export default function HomeScreen() {
       const message = err instanceof Error ? err.message : 'Could not load your update';
       Toast.show({ type: 'error', text1: 'Update unavailable', text2: message });
     }
-  }, [restaurants, mapApiRestaurant]);
+  }, [restaurants, mapApiRestaurant, markRead, upsertCall]);
+
+  const openUpdateDetail = useCallback(
+    (update: CallUpdate) => {
+      markRead(update.callId);
+      void openVoiceCallResult(update.callId);
+    },
+    [markRead, openVoiceCallResult]
+  );
 
   useQueueNotifications(deviceId);
 
@@ -460,6 +480,7 @@ useEffect(() => {
   // Pull to refresh
   const onRefresh = async () => {
     setRefreshing(true);
+    void refreshUpdates();
     try {
       // Refresh location first
       const location = await getCurrentLocation();
@@ -630,6 +651,7 @@ useEffect(() => {
       setModalOpen(true);
       setLoadingRestaurantId(null);
       setActiveCallRestaurantId(r.id);
+      upsertCall({ ...call, restaurantName: r.name }, r.name);
 
       Toast.show({
         type: 'success',
@@ -644,6 +666,7 @@ useEffect(() => {
         try {
           const result = await pollVoiceCallUntilDone(call.id);
           handledVoiceCallIds.add(result.id);
+          upsertCall({ ...result, restaurantName: r.name }, r.name);
           setCallStatus(result.status === 'completed' ? 'completed' : 'failed');
           setAnswerSummary(result.answerSummary ?? result.errorMessage ?? null);
 
@@ -802,47 +825,57 @@ useEffect(() => {
           );
         })()}
 
-        {/* Loading state */}
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#F45B5B" />
-            <Text style={styles.loadingText}>Loading restaurants...</Text>
-          </View>
-        ) : filtered.length === 0 ? (
-          /* Empty state */
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              {query || selectedCuisine !== "All" || showNearbyOnly
-                ? "No restaurants found"
-                : locationPermissionDenied
-                ? "Enable location to see nearby restaurants"
-                : "No restaurants available"}
-            </Text>
-            <Text style={styles.emptySubtext}>
-              {query || selectedCuisine !== "All" || showNearbyOnly
-                ? "Try a different search or filter"
-                : "Pull down to refresh"}
-            </Text>
-          </View>
-        ) : (
-          /* Restaurant list */
-          <FlatList
-            data={filtered}
-            keyExtractor={(item) => item.id.toString()}
-            renderItem={renderItem}
-            // extraData={now} // COOLDOWN DISABLED (today)
-            contentContainerStyle={{ paddingBottom: 32 }}
-            ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor="#F45B5B"
-                colors={["#F45B5B"]}
+        <FlatList
+          data={loading ? [] : filtered}
+          keyExtractor={(item) => item.id.toString()}
+          renderItem={renderItem}
+          ListHeaderComponent={
+            <View style={styles.updatesSection}>
+              <UpdatesFeed
+                updates={callUpdates}
+                loading={updatesLoading}
+                onSelectUpdate={openUpdateDetail}
               />
-            }
-          />
-        )}
+            </View>
+          }
+          contentContainerStyle={
+            filtered.length === 0 && !loading
+              ? { flexGrow: 1, paddingBottom: 32 }
+              : { paddingBottom: 32 }
+          }
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          ListEmptyComponent={
+            loading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#F45B5B" />
+                <Text style={styles.loadingText}>Loading restaurants...</Text>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>
+                  {query || selectedCuisine !== "All" || showNearbyOnly
+                    ? "No restaurants found"
+                    : locationPermissionDenied
+                      ? "Enable location to see nearby restaurants"
+                      : "No restaurants available"}
+                </Text>
+                <Text style={styles.emptySubtext}>
+                  {query || selectedCuisine !== "All" || showNearbyOnly
+                    ? "Try a different search or filter"
+                    : "Pull down to refresh"}
+                </Text>
+              </View>
+            )
+          }
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#F45B5B"
+              colors={["#F45B5B"]}
+            />
+          }
+        />
 
         <FilterModal
           visible={filterModalOpen}
@@ -895,6 +928,9 @@ const styles = StyleSheet.create({
   subtitle: {
     color: "#475569",
     marginBottom: 8,
+  },
+  updatesSection: {
+    marginBottom: 12,
   },
   banner: {
     backgroundColor: "#FEF3C7",

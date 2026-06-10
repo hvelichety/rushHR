@@ -86,6 +86,10 @@ export async function fetchVoiceCall(callId: number): Promise<VoiceCall> {
   return voiceFetch<VoiceCall>(`/calls/${callId}`);
 }
 
+export async function fetchDeviceCallUpdates(deviceId: string): Promise<VoiceCall[]> {
+  return voiceFetch<VoiceCall[]>(`/calls?deviceId=${encodeURIComponent(deviceId)}`);
+}
+
 export async function pollVoiceCallUntilDone(
   callId: number,
   options?: { timeoutMs?: number; intervalMs?: number; initialDelayMs?: number }
