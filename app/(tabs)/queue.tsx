@@ -6,6 +6,7 @@ import { QUEUE_COLORS } from '@/constants/queueTheme';
 import { useQueueNotifications } from '@/hooks/useQueueNotifications';
 import { fetchActiveQueueEntries, fetchLocations, joinQueue } from '@/utils/queueApi';
 import { QueueApiError } from '@/utils/queueErrors';
+import { MAX_ACTIVE_QUEUES } from '@/utils/queueLimits';
 import {
   clearQueueProfile,
   getSavedQueueProfile,
@@ -159,6 +160,14 @@ export default function QueueScreen() {
         goToQueueStatus(err.existingEntryId);
         return;
       }
+      if (err instanceof QueueApiError && err.code === 'MAX_QUEUES_REACHED') {
+        Toast.show({
+          type: 'error',
+          text1: 'Queue limit reached',
+          text2: `You can only be in ${MAX_ACTIVE_QUEUES} queues at once. Leave one to join another.`,
+        });
+        return;
+      }
       Toast.show({
         type: 'error',
         text1: 'Could not join queue',
@@ -229,6 +238,14 @@ export default function QueueScreen() {
               onJoin={() => {
                 if (activeByLocation[item.id]) {
                   goToQueueStatus(activeByLocation[item.id]);
+                  return;
+                }
+                if (Object.keys(activeByLocation).length >= MAX_ACTIVE_QUEUES) {
+                  Toast.show({
+                    type: 'error',
+                    text1: 'Queue limit reached',
+                    text2: `You can only be in ${MAX_ACTIVE_QUEUES} queues at once. Leave one to join another.`,
+                  });
                   return;
                 }
                 setSelectedLocation(item);

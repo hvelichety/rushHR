@@ -20,6 +20,7 @@ import {
   collectPendingNotifications,
   getActiveEntriesForDevice,
 } from './queueService.js';
+import { createVoiceCall, getVoiceCall, handleVapiWebhook } from './vapiService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -49,6 +50,50 @@ setInterval(async () => {
     console.error('Background queue job error:', err.message);
   }
 }, 5000);
+
+app.post('/calls', async (req, res) => {
+  try {
+    const { restaurantId, question, questionForRestaurant, deviceId, pushToken } = req.body;
+    const resolvedQuestion = questionForRestaurant ?? question;
+
+    if (!restaurantId || !resolvedQuestion?.trim()) {
+      return res.status(400).json({
+        error: 'restaurantId and question (or questionForRestaurant) are required',
+      });
+    }
+
+    const call = await createVoiceCall({
+      restaurantId: Number(restaurantId),
+      questionForRestaurant: resolvedQuestion,
+      deviceId,
+      pushToken,
+    });
+
+    res.status(201).json(call);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/calls/:callId', async (req, res) => {
+  try {
+    const call = await getVoiceCall(Number(req.params.callId));
+    if (!call) return res.status(404).json({ error: 'Call not found' });
+    res.json(call);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/webhooks/vapi', async (req, res) => {
+  try {
+    const result = await handleVapiWebhook(req.body);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Vapi webhook error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/health', async (_req, res) => {
   if (!process.env.DATABASE_URL) {
@@ -135,8 +180,12 @@ app.post('/queue/join', async (req, res) => {
     if (err.code === 'ALREADY_IN_QUEUE') {
       return res.status(409).json({
         error: err.message,
+        code: err.code,
         existingEntryId: err.existingEntryId,
       });
+    }
+    if (err.code === 'MAX_QUEUES_REACHED') {
+      return res.status(409).json({ error: err.message, code: err.code });
     }
     res.status(400).json({ error: err.message });
   }

@@ -16,10 +16,12 @@ import {
 } from "react-native";
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
+import AskRestaurantModal from "../../components/AskRestaurantModal";
 import FilterModal from "../../components/FilterModal";
 import RequestModal from "../../components/RequestModal";
 import RestaurantCard from "../../components/RestaurantCard";
-import { fetchRestaurant, requestWaitTime } from "../../utils/api";
+import { fetchRestaurant } from "../../utils/api";
+import { createRestaurantCall, pollVoiceCallUntilDone } from "../../utils/voiceApi";
 import { API_BASE_URL, NEARBY_RADIUS_MILES } from "../../utils/config";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
@@ -75,10 +77,16 @@ export default function HomeScreen() {
   // filter modal state
   const [filterModalOpen, setFilterModalOpen] = useState(false);
 
-  // modal state
+  // ask / call modal state
+  const [askModalOpen, setAskModalOpen] = useState(false);
+  const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [requested, setRequested] = useState<Restaurant | null>(null);
   const [recommendations, setRecommendations] = useState<Restaurant[]>([]);
+  const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
+  const [callStatus, setCallStatus] = useState<'calling' | 'completed' | 'failed'>('calling');
+  const [answerSummary, setAnswerSummary] = useState<string | null>(null);
+  const [placingCall, setPlacingCall] = useState(false);
 
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
@@ -499,21 +507,32 @@ useEffect(() => {
     return result;
   }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
 
-  const handleRequest = async (r: Restaurant) => {
+  const handleOpenAsk = (r: Restaurant) => {
+    setSelectedRestaurant(r);
+    setAskModalOpen(true);
+  };
+
+  const handleSubmitQuestion = async (question: string) => {
+    const r = selectedRestaurant;
+    if (!r) return;
+
+    setPlacingCall(true);
     setLoadingRestaurantId(r.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      const res = await requestWaitTime(r, 4, {
+      const call = await createRestaurantCall({
+        restaurantId: Number(r.id),
+        questionForRestaurant: question,
         deviceId: deviceIdRef.current ?? undefined,
         pushToken: pushTokenRef.current ?? undefined,
-        userLat: userLocation?.latitude,
-        userLng: userLocation?.longitude,
       });
 
-      console.log("✅ Call triggered:", res.call_sid, res);
-
+      setAskModalOpen(false);
       setRequested(r);
+      setActiveQuestion(question);
+      setCallStatus('calling');
+      setAnswerSummary(null);
       setRecommendations(
         restaurants
           .filter((x) => x.id !== r.id)
@@ -525,58 +544,80 @@ useEffect(() => {
       Toast.show({
         type: 'success',
         text1: `Calling ${r.name}...`,
-        text2: 'Usually takes 1-2 minutes',
+        text2: 'Our AI is asking your question',
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      setTimeout(async () => {
-        console.log("🔍 Fetching restaurant ID:", r.id);
-        const latest = await fetchRestaurant(Number(r.id));
+      void (async () => {
+        try {
+          const result = await pollVoiceCallUntilDone(call.id);
+          setCallStatus(result.status === 'completed' ? 'completed' : 'failed');
+          setAnswerSummary(result.answerSummary ?? result.errorMessage ?? null);
 
-        if (latest) {
-          console.log("📦 Got updated data from backend:", latest);
-
-          setRestaurants(prev =>
-            prev.map(x =>
-              x.id === r.id
-                ? {
-                    ...x,
-                    waitMinutes:
-                      latest.wait_minutes !== undefined
-                        ? latest.wait_minutes
-                        : x.waitMinutes,
-                    lastUpdatedAt: Date.now(),
-                  }
-                : x
-            )
-          );
-
-          if (latest.wait_minutes !== null && latest.wait_minutes !== undefined) {
+          if (result.status === 'completed') {
             Toast.show({
               type: 'success',
-              text1: `Wait time ready!`,
-              text2: `${r.name} has a ${latest.wait_minutes > 0 ? `${latest.wait_minutes} min wait` : 'no wait'}`,
+              text1: 'Answer ready',
+              text2: result.answerSummary?.slice(0, 80) || 'Tap to view the full answer',
             });
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          } else {
+            Toast.show({
+              type: 'error',
+              text1: 'Could not get an answer',
+              text2: result.errorMessage || 'Try again in a moment',
+            });
           }
-        } else {
-          console.warn("⚠️ No updated data from backend for", r.id);
-        }
 
-        setLoadingRestaurantId(null);
-      }, 5000);
+          if (result.waitMinutes !== null && result.waitMinutes !== undefined) {
+            setRestaurants((prev) =>
+              prev.map((x) =>
+                x.id === r.id
+                  ? { ...x, waitMinutes: result.waitMinutes!, lastUpdatedAt: Date.now() }
+                  : x
+              )
+            );
+          } else {
+            const latest = await fetchRestaurant(Number(r.id));
+            if (latest?.wait_minutes !== undefined && latest?.wait_minutes !== null) {
+              setRestaurants((prev) =>
+                prev.map((x) =>
+                  x.id === r.id
+                    ? {
+                        ...x,
+                        waitMinutes: latest.wait_minutes,
+                        lastUpdatedAt: Date.now(),
+                      }
+                    : x
+                )
+              );
+            }
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Still waiting for an answer';
+          setCallStatus('calling');
+          Toast.show({
+            type: 'info',
+            text1: 'Still on the line',
+            text2: message,
+          });
+        } finally {
+          setLoadingRestaurantId(null);
+        }
+      })();
     } catch (err) {
-      console.error("❌ Error while calling backend:", err);
+      console.error('❌ Error placing restaurant call:', err);
       setLoadingRestaurantId(null);
-      const message =
-        err instanceof Error ? err.message : "Please try again";
+      const message = err instanceof Error ? err.message : 'Please try again';
       Toast.show({
         type: 'error',
         text1: 'Call not placed',
         text2: message,
       });
+    } finally {
+      setPlacingCall(false);
     }
-  };  
+  };
 
   const renderItem = ({ item }: { item: Restaurant }) => {
     const minsSinceUpdate = minutesSince(item.lastUpdatedAt);
@@ -590,7 +631,7 @@ useEffect(() => {
         cooldownSeconds={0}
         canRequest={true}
         isLoading={isLoading}
-        onRequest={() => handleRequest(item)}
+        onRequest={() => handleOpenAsk(item)}
       />
     );
   };
@@ -718,11 +759,21 @@ useEffect(() => {
             setFilterModalOpen(false);
           }}
         />
+        <AskRestaurantModal
+          visible={askModalOpen}
+          restaurant={selectedRestaurant}
+          onClose={() => setAskModalOpen(false)}
+          onSubmit={handleSubmitQuestion}
+          submitting={placingCall}
+        />
         <RequestModal
           visible={modalOpen}
           onClose={() => setModalOpen(false)}
           requested={requested}
           recommendations={recommendations}
+          question={activeQuestion}
+          callStatus={callStatus}
+          answerSummary={answerSummary}
         />
         <Toast />
       </View>

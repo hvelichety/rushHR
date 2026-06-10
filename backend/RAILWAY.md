@@ -17,6 +17,12 @@ On the **queue service** (not Postgres), add:
 |----------|--------|
 | `DATABASE_URL` | Reference your Postgres service → `DATABASE_URL` (internal URL is fine) |
 | `PORT` | Railway sets this automatically |
+| `VAPI_API_KEY` | From [dashboard.vapi.ai](https://dashboard.vapi.ai) → API Keys |
+| `VAPI_ASSISTANT_ID` | RushHour Assistant ID |
+| `VAPI_PHONE_NUMBER_ID` | Your Twilio/Vapi outbound number ID |
+| `VAPI_WEBHOOK_URL` | `https://YOUR-QUEUE-SERVICE.up.railway.app/webhooks/vapi` |
+
+Also set the same webhook URL on the Vapi assistant (**Advanced → Server URL**).
 
 Do **not** commit `backend/.env` — use Railway's variable UI.
 

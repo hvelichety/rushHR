@@ -50,7 +50,7 @@ export default function RestaurantCard({
 
   const accessibilityLabel = `${name}${displayCuisine ? `, ${displayCuisine}` : ""}, ${waitMinutes > 0 ? `${waitMinutes} minute wait` : "no wait"}, updated ${formatTimeAgo(minutesSinceUpdate)}`;
 
-  const buttonAccessibilityLabel = `Request wait time for ${name}`;
+  const buttonAccessibilityLabel = `Call and ask ${name}`;
 
   return (
     <View
@@ -129,7 +129,7 @@ export default function RestaurantCard({
             </View>
           ) : (
             <Text style={styles.buttonText} numberOfLines={1}>
-              Request Wait Time
+              Call & Ask
             </Text>
           )}
         </Pressable>

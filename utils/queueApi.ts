@@ -51,7 +51,8 @@ async function queueFetch<T>(path: string, options?: RequestInit): Promise<T> {
     const msg = (typeof data.error === 'string' && data.error) || `Request failed (${response.status})`;
     const existingEntryId =
       typeof data.existingEntryId === 'number' ? data.existingEntryId : undefined;
-    throw new QueueApiError(msg, existingEntryId);
+    const code = typeof data.code === 'string' ? data.code : undefined;
+    throw new QueueApiError(msg, existingEntryId, code);
   }
 
   return data as T;

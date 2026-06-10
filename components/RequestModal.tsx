@@ -19,6 +19,9 @@ interface Props {
   requested: Restaurant | null;
   recommendations: Restaurant[];
   onRecommendationTap?: (restaurant: Restaurant) => void;
+  question?: string | null;
+  callStatus?: 'calling' | 'completed' | 'failed';
+  answerSummary?: string | null;
 }
 
 export default function RequestModal({
@@ -27,6 +30,9 @@ export default function RequestModal({
   requested,
   recommendations,
   onRecommendationTap,
+  question,
+  callStatus = 'calling',
+  answerSummary,
 }: Props) {
   const slideAnim = new Animated.Value(height);
 
@@ -67,13 +73,28 @@ export default function RequestModal({
           ]}
         >
           <View style={styles.handle} />
-          <Text style={styles.title}>⏳ Request Received</Text>
-          <Text style={styles.subtitle}>
-            We'll notify you when the wait time is ready for{" "}
-            <Text style={{ fontWeight: "700" }}>{requested.name}</Text>!
-            Usually takes{" "}
-            <Text style={{ fontWeight: "600" }}>1-2 minutes.</Text>
+          <Text style={styles.title}>
+            {callStatus === 'completed'
+              ? '✅ Answer ready'
+              : callStatus === 'failed'
+                ? '❌ Call issue'
+                : '📞 Calling restaurant'}
           </Text>
+          {question ? (
+            <Text style={styles.questionBox}>
+              Asking: <Text style={{ fontWeight: '700' }}>{question}</Text>
+            </Text>
+          ) : null}
+          {callStatus === 'completed' && answerSummary ? (
+            <Text style={styles.answerBox}>{answerSummary}</Text>
+          ) : (
+            <Text style={styles.subtitle}>
+              {callStatus === 'failed'
+                ? answerSummary ||
+                  `We couldn't get an answer from ${requested.name}. Try again in a moment.`
+                : `Our AI is calling ${requested.name} now. Usually takes 1-3 minutes.`}
+            </Text>
+          )}
 
           <Text style={[styles.subtitle, { marginTop: 12 }]}>
             Meanwhile, check out these similar spots 🍴
@@ -165,6 +186,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#475569",
     lineHeight: 22,
+  },
+  questionBox: {
+    fontSize: 14,
+    color: "#475569",
+    lineHeight: 20,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  answerBox: {
+    fontSize: 16,
+    color: "#0F172A",
+    lineHeight: 24,
+    marginTop: 8,
+    marginBottom: 4,
+    fontWeight: "500",
   },
   card: {
     backgroundColor: "#F8FAFC",

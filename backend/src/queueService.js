@@ -4,6 +4,7 @@ import { formatPhoneE164, isValidPhone } from './phone.js';
 import { calculateEstimatedWait, updateLocationWaitTime } from './waitTime.js';
 
 const ACTIVE_STATUSES = ['waiting', 'fifth_in_line', 'next_in_line', 'called', 'checked_in'];
+const MAX_ACTIVE_QUEUES = 2;
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 const ACTIVE_STATUS_SQL = `('waiting', 'fifth_in_line', 'next_in_line', 'called', 'checked_in')`;
@@ -232,6 +233,38 @@ export async function getActiveEntriesForDevice(deviceId) {
   return rows.map(mapEntry);
 }
 
+async function countActiveQueuesForCustomer({ deviceId, customerContact }) {
+  if (deviceId && customerContact) {
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS count FROM queue_entries
+       WHERE status IN ${ACTIVE_STATUS_SQL}
+         AND (device_id = $1 OR customer_contact = $2)`,
+      [deviceId, customerContact]
+    );
+    return rows[0].count;
+  }
+
+  if (deviceId) {
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS count FROM queue_entries
+       WHERE device_id = $1 AND status IN ${ACTIVE_STATUS_SQL}`,
+      [deviceId]
+    );
+    return rows[0].count;
+  }
+
+  if (customerContact) {
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS count FROM queue_entries
+       WHERE customer_contact = $1 AND status IN ${ACTIVE_STATUS_SQL}`,
+      [customerContact]
+    );
+    return rows[0].count;
+  }
+
+  return 0;
+}
+
 export async function joinQueue({ locationId, customerName, customerContact, partySize, deviceId, pushToken }) {
   const { rows: locRows } = await query('SELECT * FROM restaurants WHERE id = $1', [locationId]);
   const location = locRows[0];
@@ -249,6 +282,16 @@ export async function joinQueue({ locationId, customerName, customerContact, par
     const err = new Error('You are already in this queue');
     err.code = 'ALREADY_IN_QUEUE';
     err.existingEntryId = existing.id;
+    throw err;
+  }
+
+  const activeQueueCount = await countActiveQueuesForCustomer({
+    deviceId,
+    customerContact: normalizedContact,
+  });
+  if (activeQueueCount >= MAX_ACTIVE_QUEUES) {
+    const err = new Error('You can only be in 2 queues at a time');
+    err.code = 'MAX_QUEUES_REACHED';
     throw err;
   }
 

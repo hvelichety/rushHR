@@ -44,10 +44,17 @@ export async function withTransaction(fn) {
 }
 
 export async function initDb() {
-  const migrationPath = path.join(__dirname, '..', 'migrations', '001_queue_schema.sql');
-  const sql = fs.readFileSync(migrationPath, 'utf8');
-  await getPool().query(sql);
-  console.log('✅ Postgres queue schema ready (restaurants + queue_entries)');
+  const migrationsDir = path.join(__dirname, '..', 'migrations');
+  const files = fs
+    .readdirSync(migrationsDir)
+    .filter((name) => name.endsWith('.sql'))
+    .sort();
+
+  for (const file of files) {
+    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    await getPool().query(sql);
+    console.log(`✅ Migration applied: ${file}`);
+  }
 }
 
 export async function pingDb() {
