@@ -7,6 +7,28 @@ import { API_BASE_URL } from './config';
 // In-memory device ID (AsyncStorage native module is unreliable in some Expo Go setups)
 let cachedDeviceId: string | null = null;
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const PLACEHOLDER_PROJECT_IDS = new Set([
+  'YOUR_EAS_PROJECT_ID',
+  'your-eas-project-id',
+  'your_eas_project_id',
+]);
+
+function resolveExpoProjectId(): string | null {
+  const raw =
+    (Constants.easConfig as { projectId?: string } | null)?.projectId ||
+    (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas
+      ?.projectId;
+
+  if (!raw?.trim()) return null;
+  const projectId = raw.trim();
+  if (PLACEHOLDER_PROJECT_IDS.has(projectId)) return null;
+  if (!UUID_RE.test(projectId)) return null;
+  return projectId;
+}
+
 function createDeviceId(): string {
   return `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
@@ -56,15 +78,15 @@ export async function registerForPushNotifications(): Promise<string | null> {
       return null;
     }
 
-    const projectId =
-      (Constants.easConfig as { projectId?: string } | null)?.projectId ||
-      (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas
-        ?.projectId;
+    const projectId = resolveExpoProjectId();
+    if (!projectId) {
+      console.warn(
+        '⚠️ Push notifications need a valid EAS project ID. Run `npx eas init` in the project root, then set extra.eas.projectId in app.json to the UUID from expo.dev.'
+      );
+      return null;
+    }
 
-    const tokenData =
-      projectId && projectId !== 'YOUR_EAS_PROJECT_ID'
-        ? await Notifications.getExpoPushTokenAsync({ projectId })
-        : await Notifications.getExpoPushTokenAsync();
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
 
     const token = tokenData.data;
     if (__DEV__) console.log('🔔 Push token:', token);

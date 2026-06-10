@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "RushHR",
+    "name": "RushHour",
     "slug": "rushhour-restaurant",
     "description": "Skip the wait! Get real-time restaurant wait times instantly.",
     "version": "1.0.0",
@@ -25,8 +25,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "This app does not use the camera.",
         "NSMicrophoneUsageDescription": "This app does not use the microphone.",
-        "NSLocationWhenInUseUsageDescription": "RushHR needs your location to show nearby restaurants and calculate distances.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "RushHR needs your location to show nearby restaurants and calculate distances."
+        "NSLocationWhenInUseUsageDescription": "RushHour needs your location to show nearby restaurants and calculate distances.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "RushHour needs your location to show nearby restaurants and calculate distances."
       }
     },
     "android": {
@@ -43,7 +43,9 @@
       "permissions": [
         "INTERNET",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -76,7 +78,7 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "RushHR needs your location to show nearby restaurants and calculate distances."
+          "locationAlwaysAndWhenInUsePermission": "RushHour needs your location to show nearby restaurants and calculate distances."
         }
       ]
     ],
@@ -85,10 +87,11 @@
       "reactCompiler": true
     },
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "4b72afae-f36f-4437-b5ab-c1557b9c53f0"
       }
     },
-    "owner": "YOUR_EXPO_USERNAME"
+    "owner": "hvelichety"
   }
 }

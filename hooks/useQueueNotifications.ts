@@ -30,7 +30,7 @@ export function useQueueNotifications(deviceId: string | null) {
           await Notifications.scheduleNotificationAsync({
             content: {
               title: isVoiceCall
-                ? notification.restaurantName || 'RushHR'
+                ? notification.restaurantName || 'RushHour'
                 : 'Queue Update',
               body: isVoiceCall ? 'Your update is ready' : notification.message,
               data: isVoiceCall

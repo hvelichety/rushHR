@@ -1,4 +1,4 @@
-# RushHR - Restaurant Wait Time App
+# RushHour - Restaurant Wait Time App
 
 Skip the wait! Get real-time restaurant wait times instantly.
 

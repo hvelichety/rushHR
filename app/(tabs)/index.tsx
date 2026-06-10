@@ -738,7 +738,7 @@ useEffect(() => {
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.container}>
-        <Text style={styles.logo}>🍽️ RushHR</Text>
+        <Text style={styles.logo}>🍽️ RushHour</Text>
         <Text style={styles.subtitle}>
           {userLocation ? "What's nearby?" : "Find a restaurant near you"}
         </Text>
