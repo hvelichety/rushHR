@@ -1,5 +1,6 @@
 import { query } from './db.js';
 import { formatPhoneE164 } from './phone.js';
+import { enqueueNotifications } from './notificationQueue.js';
 
 const VAPI_API_URL = 'https://api.vapi.ai/call';
 const VAPI_DIAL_CONFIRM_MS = 18_000;
@@ -46,6 +47,7 @@ function getVapiConfig() {
   const apiKey = cleanEnvValue(process.env.VAPI_API_KEY);
   const assistantId = cleanEnvValue(process.env.VAPI_ASSISTANT_ID);
   const phoneNumberId = cleanEnvValue(process.env.VAPI_PHONE_NUMBER_ID);
+  const fromPhoneNumber = cleanEnvValue(process.env.VAPI_FROM_NUMBER);
 
   const missing = [];
   if (!apiKey) missing.push('VAPI_API_KEY');
@@ -66,7 +68,7 @@ function getVapiConfig() {
     );
   }
 
-  return { apiKey, assistantId, phoneNumberId };
+  return { apiKey, assistantId, phoneNumberId, fromPhoneNumber: fromPhoneNumber || null };
 }
 
 function normalizeQuestion(text) {
@@ -89,7 +91,13 @@ async function getRestaurantById(restaurantId) {
 }
 
 export async function getVoiceCall(callId) {
-  const { rows } = await query('SELECT * FROM voice_calls WHERE id = $1', [callId]);
+  const { rows } = await query(
+    `SELECT vc.*, r.phone AS restaurant_phone
+     FROM voice_calls vc
+     JOIN restaurants r ON r.id = vc.restaurant_id
+     WHERE vc.id = $1`,
+    [callId]
+  );
   if (!rows[0]) return null;
 
   let row = rows[0];
@@ -97,7 +105,9 @@ export async function getVoiceCall(callId) {
     row = (await syncVoiceCallFromVapi(row)) ?? row;
   }
 
-  return mapVoiceCall(row);
+  const mapped = mapVoiceCall(row);
+  const destinationPhone = formatPhoneE164(row.restaurant_phone);
+  return destinationPhone ? { ...mapped, destinationPhone } : mapped;
 }
 
 function sleep(ms) {
@@ -207,11 +217,7 @@ function extractAnswerFromVapiPayload(vapiCall, question) {
   }
 
   const fromMessages = buildAnswerFromMessages(vapiCall.artifact?.messages || vapiCall.messages);
-  if (fromMessages) return fromMessages;
-
-  const transcript = vapiCall.artifact?.transcript || vapiCall.transcript;
-  const fromTranscript = buildAnswerFromTranscript(transcript);
-  if (fromTranscript) return fromTranscript;
+  if (fromMessages && !isVoicemailTranscript(fromMessages)) return fromMessages;
 
   if (/wait/i.test(question)) {
     return 'The call finished, but no wait time was captured. Try asking again.';
@@ -243,6 +249,81 @@ function isVapiCallFailureReason(endedReason) {
     reason.includes('machine') ||
     reason.includes('unanswered')
   );
+}
+
+const VOICEMAIL_TRANSCRIPT_PATTERNS = [
+  /leave (?:your |a )?message/i,
+  /voice\s?mail/i,
+  /not available(?: to take your call)?/i,
+  /mailbox (?:is )?full/i,
+  /at the tone/i,
+  /after the (?:beep|tone)/i,
+  /record your message/i,
+  /no one is available/i,
+  /cannot take your call/i,
+  /try again later/i,
+  /press \d+ to/i,
+  /reached a voice mail/i,
+];
+
+function isVoicemailTranscript(text) {
+  if (!text?.trim()) return false;
+  return VOICEMAIL_TRANSCRIPT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+const VOICEMAIL_USER_MESSAGE =
+  'The call went straight to voicemail — your phone may never have rung. Unknown out-of-state numbers (like +1 229) are often silenced. Turn off Settings → Phone → Silence Unknown Callers, or buy a local NJ number in Vapi.';
+
+function resolveCallOutcome(vapiCall, question) {
+  const transcript = pickTranscriptFromVapi(vapiCall);
+  const endedReason = vapiCall.endedReason || vapiCall.endReason;
+  const voicemailDetected =
+    isVoicemailTranscript(transcript) ||
+    isVoicemailTranscript(buildAnswerFromTranscript(transcript));
+  const failed = isVapiCallFailureReason(endedReason) || voicemailDetected;
+
+  if (failed) {
+    if (voicemailDetected) {
+      return {
+        transcript,
+        failed: true,
+        answerSummary: null,
+        errorMessage: VOICEMAIL_USER_MESSAGE,
+      };
+    }
+    return {
+      transcript,
+      failed: true,
+      answerSummary: `Call ended (${endedReason}). No answer was captured.`,
+      errorMessage: String(endedReason),
+    };
+  }
+
+  return {
+    transcript,
+    failed: false,
+    answerSummary: extractAnswerFromVapiPayload(vapiCall, question),
+    errorMessage: null,
+  };
+}
+
+async function waitForVapiAnalysis(vapiCallId, maxMs = 20_000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const call = await fetchVapiCallRecord(vapiCallId);
+    if (!call) break;
+    const summary = call.analysis?.summary;
+    const structuredAnswer = call.analysis?.structuredData?.answer;
+    if (
+      (typeof summary === 'string' && summary.trim()) ||
+      (typeof structuredAnswer === 'string' && structuredAnswer.trim())
+    ) {
+      return call;
+    }
+    if (!isVapiCallEnded(call)) return call;
+    await sleep(2_000);
+  }
+  return fetchVapiCallRecord(vapiCallId);
 }
 
 async function finalizeVoiceCallRecord(callRecord, { answerSummary, transcript, failed, errorMessage }) {
@@ -282,7 +363,23 @@ async function finalizeVoiceCallRecord(callRecord, { answerSummary, transcript, 
     ]);
   }
 
-  return rows[0];
+  const updated = rows[0];
+  if (!failed && updated.device_id) {
+    const restaurant = await getRestaurantById(updated.restaurant_id);
+    enqueueNotifications([
+      {
+        type: 'voice_call_ready',
+        callId: updated.id,
+        deviceId: updated.device_id,
+        restaurantId: updated.restaurant_id,
+        restaurantName: restaurant?.name ?? 'Restaurant',
+        question: updated.question_for_restaurant,
+        message: 'Your update is ready',
+      },
+    ]);
+  }
+
+  return updated;
 }
 
 async function syncVoiceCallFromVapi(callRecord) {
@@ -296,21 +393,11 @@ async function syncVoiceCallFromVapi(callRecord) {
     const vapiCall = await fetchVapiCallRecord(callRecord.vapi_call_id);
     if (!vapiCall || !isVapiCallEnded(vapiCall)) return callRecord;
 
-    const transcript = pickTranscriptFromVapi(vapiCall);
-    const endedReason = vapiCall.endedReason || vapiCall.endReason;
-    const failed = isVapiCallFailureReason(endedReason);
-
-    const answerSummary = failed
-      ? `Call ended (${endedReason}). No answer was captured.`
-      : extractAnswerFromVapiPayload(vapiCall, callRecord.question_for_restaurant);
+    const enrichedCall = await waitForVapiAnalysis(callRecord.vapi_call_id);
+    const outcome = resolveCallOutcome(enrichedCall ?? vapiCall, callRecord.question_for_restaurant);
 
     return (
-      (await finalizeVoiceCallRecord(callRecord, {
-        answerSummary,
-        transcript,
-        failed,
-        errorMessage: failed ? String(endedReason) : null,
-      })) ?? callRecord
+      (await finalizeVoiceCallRecord(callRecord, outcome)) ?? callRecord
     );
   } catch (err) {
     console.error('Vapi sync failed:', err.message);
@@ -358,6 +445,21 @@ export async function createVoiceCall({
       variableValues: {
         restaurant_name: restaurant.name,
         user_question: question,
+      },
+      voicemailMessage: '',
+      analysisPlan: {
+        summaryPrompt: `Summarize what the restaurant staff said in 1-3 sentences. The customer's question was: "${question}". Focus on their answer. Ignore voicemail greetings and automated phone systems. If only voicemail was reached, say the restaurant did not answer live.`,
+        structuredDataSchema: {
+          type: 'object',
+          properties: {
+            answer: {
+              type: 'string',
+              description: 'Brief summary of what the restaurant said in response to the question',
+            },
+          },
+          required: ['answer'],
+        },
+        structuredDataPrompt: `Extract a concise answer to the customer's question based on what the restaurant staff said. Question: "${question}"`,
       },
     },
   };
@@ -438,7 +540,7 @@ export async function createVoiceCall({
 
   console.log(`📞 Vapi call started: ${vapiCallId} → ${destinationPhone}`);
 
-  return mapVoiceCall(updatedRows[0]);
+  return { ...mapVoiceCall(updatedRows[0]), destinationPhone, fromPhoneNumber: vapiConfig.fromPhoneNumber };
 }
 
 function pickTranscript(message) {
@@ -473,14 +575,17 @@ function pickSummary(message) {
 
 function buildAnswerFromWebhook(message, question) {
   const summary = pickSummary(message);
-  if (summary) return summary;
+  if (summary && !isVoicemailTranscript(summary)) return summary;
 
-  const transcript = pickTranscript(message);
-  const fromTranscript = buildAnswerFromTranscript(transcript);
-  if (fromTranscript) return fromTranscript;
+  const structured = message.analysis?.structuredData || message.call?.analysis?.structuredData;
+  if (structured && typeof structured === 'object') {
+    if (typeof structured.answer === 'string' && structured.answer.trim()) {
+      return structured.answer.trim();
+    }
+  }
 
   const fromMessages = buildAnswerFromMessages(message.artifact?.messages || message.messages);
-  if (fromMessages) return fromMessages;
+  if (fromMessages && !isVoicemailTranscript(fromMessages)) return fromMessages;
 
   if (/wait/i.test(question)) {
     return 'The call finished, but no wait time was captured. Try asking again.';
@@ -515,20 +620,18 @@ export async function handleVapiWebhook(body) {
   }
 
   if (type === 'end-of-call-report') {
-    const transcript = pickTranscript(message);
-    const endedReason = message.endedReason || message.call?.endedReason;
-    const failed = isVapiCallFailureReason(endedReason);
+    const enrichedCall = await waitForVapiAnalysis(vapiCallId);
+    const vapiShape = enrichedCall ?? {
+      analysis: message.analysis || message.call?.analysis,
+      summary: message.summary || message.call?.summary,
+      artifact: message.artifact,
+      messages: message.messages,
+      transcript: pickTranscript(message),
+      endedReason: message.endedReason || message.call?.endedReason,
+    };
+    const outcome = resolveCallOutcome(vapiShape, callRecord.question_for_restaurant);
 
-    const answerSummary = failed
-      ? `Call ended (${endedReason}). No answer was captured.`
-      : buildAnswerFromWebhook(message, callRecord.question_for_restaurant);
-
-    const updated = await finalizeVoiceCallRecord(callRecord, {
-      answerSummary,
-      transcript,
-      failed,
-      errorMessage: failed ? String(endedReason) : null,
-    });
+    const updated = await finalizeVoiceCallRecord(callRecord, outcome);
 
     return { handled: true, type, callId: updated.id };
   }

@@ -1,5 +1,5 @@
 import { EventSourcePolyfill } from "event-source-polyfill";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   SafeAreaView,
@@ -21,7 +21,7 @@ import FilterModal from "../../components/FilterModal";
 import RequestModal from "../../components/RequestModal";
 import RestaurantCard from "../../components/RestaurantCard";
 import { fetchRestaurant } from "../../utils/api";
-import { createRestaurantCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
+import { createRestaurantCall, fetchVoiceCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
 import { API_BASE_URL, NEARBY_RADIUS_MILES } from "../../utils/config";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
@@ -56,6 +56,7 @@ import {
   registerPushToken,
   setupNotificationListeners,
 } from "../../utils/notifications";
+import { handledVoiceCallIds, useQueueNotifications } from "../../hooks/useQueueNotifications";
 
 
 
@@ -92,13 +93,83 @@ export default function HomeScreen() {
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
   // Cooldown disabled: every tap triggers a call request
+
+  const mapApiRestaurant = useCallback((r: Record<string, unknown>): Restaurant => ({
+    id: r.id as number,
+    name: (r.name as string) || 'Restaurant',
+    cuisine: (r.cuisine as string) || 'Unknown',
+    phone: r.phone as string,
+    waitMinutes: r.wait_minutes as number | undefined,
+    lastUpdatedAt: r.last_updated_at
+      ? (r.last_updated_at as number) < 1e12
+        ? (r.last_updated_at as number) * 1000
+        : (r.last_updated_at as number)
+      : undefined,
+    image: (r.image as string) || 'https://via.placeholder.com/150',
+    timezone: r.timezone as string | undefined,
+    openHour: r.open_hour as number | undefined,
+    closeHour: r.close_hour as number | undefined,
+    lastCalledAt: r.last_called_at as number | undefined,
+    latitude: r.latitude as number | undefined,
+    longitude: r.longitude as number | undefined,
+    address: r.address as string | undefined,
+    city: r.city as string | undefined,
+    state: r.state as string | undefined,
+    rating: r.rating as number | undefined,
+    distance_miles: r.distance_miles as number | undefined,
+  }), []);
+
+  const openVoiceCallResult = useCallback(async (callId: number) => {
+    try {
+      const result = await fetchVoiceCall(callId);
+      handledVoiceCallIds.add(callId);
+
+      let restaurant =
+        restaurants.find((x) => x.id === result.restaurantId) ?? null;
+      if (!restaurant) {
+        const raw = await fetchRestaurant(result.restaurantId);
+        if (raw?.data) restaurant = mapApiRestaurant(raw.data);
+        else if (raw) restaurant = mapApiRestaurant(raw);
+      }
+      if (!restaurant) {
+        restaurant = {
+          id: result.restaurantId,
+          name: 'Restaurant',
+          cuisine: 'Unknown',
+          phone: '',
+          waitMinutes: 0,
+          lastUpdatedAt: Date.now(),
+          image: 'https://via.placeholder.com/150',
+        };
+      }
+
+      setRequested(restaurant);
+      setActiveQuestion(result.questionForRestaurant);
+      setCallStatus(result.status === 'completed' ? 'completed' : 'failed');
+      setAnswerSummary(result.answerSummary ?? result.errorMessage ?? null);
+      setRecommendations(
+        restaurants
+          .filter((x) => x.id !== restaurant!.id)
+          .sort(() => 0.5 - Math.random())
+          .slice(0, 3)
+      );
+      setModalOpen(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not load your update';
+      Toast.show({ type: 'error', text1: 'Update unavailable', text2: message });
+    }
+  }, [restaurants, mapApiRestaurant]);
+
+  useQueueNotifications(deviceId);
 
   // Push notifications
   useEffect(() => {
     async function setupPushNotifications() {
       const id = await getDeviceId();
       deviceIdRef.current = id;
+      setDeviceId(id);
       const token = await registerForPushNotifications();
       if (token) {
         pushTokenRef.current = token;
@@ -110,11 +181,15 @@ export default function HomeScreen() {
     setupPushNotifications();
 
     const cleanup = setupNotificationListeners((data) => {
+      if (data.type === 'voice_call_ready' && data.callId) {
+        void openVoiceCallResult(Number(data.callId));
+        return;
+      }
       console.log('👆 Notification tapped:', data);
     });
 
     return cleanup;
-  }, []);
+  }, [openVoiceCallResult]);
 
   // Setup location tracking
   useEffect(() => {
@@ -559,21 +634,24 @@ useEffect(() => {
       Toast.show({
         type: 'success',
         text1: `Calling ${r.name}...`,
-        text2: 'Our AI is asking your question',
+        text2: call.fromPhoneNumber
+          ? `Add ${call.fromPhoneNumber} to Contacts if it doesn't ring`
+          : 'Our AI is asking your question',
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       void (async () => {
         try {
           const result = await pollVoiceCallUntilDone(call.id);
+          handledVoiceCallIds.add(result.id);
           setCallStatus(result.status === 'completed' ? 'completed' : 'failed');
           setAnswerSummary(result.answerSummary ?? result.errorMessage ?? null);
 
           if (result.status === 'completed') {
             Toast.show({
               type: 'success',
-              text1: 'Answer ready',
-              text2: result.answerSummary?.slice(0, 80) || 'Tap to view the full answer',
+              text1: 'Your update is ready',
+              text2: 'Tap to see what they said',
             });
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           } else {

@@ -20,6 +20,11 @@ import {
   collectPendingNotifications,
   getActiveEntriesForDevice,
 } from './queueService.js';
+import {
+  clearPendingNotifications,
+  enqueueNotifications,
+  getPendingNotificationsForDevice,
+} from './notificationQueue.js';
 import { createVoiceCall, getVoiceCall, handleVapiWebhook } from './vapiService.js';
 
 const app = express();
@@ -27,19 +32,6 @@ const PORT = process.env.PORT || 5001;
 
 app.use(cors());
 app.use(express.json());
-
-const pendingNotifications = [];
-
-function enqueueNotifications(notifications) {
-  if (!notifications?.length) return;
-  for (const n of notifications) {
-    pendingNotifications.push({
-      ...n,
-      id: `${Date.now()}-${Math.random()}`,
-      createdAt: new Date().toISOString(),
-    });
-  }
-}
 
 setInterval(async () => {
   try {
@@ -280,15 +272,8 @@ app.get('/notifications/pending', async (req, res) => {
   try {
     const { deviceId } = req.query;
     const relevant = deviceId
-      ? (
-          await Promise.all(
-            pendingNotifications.map(async (n) => {
-              const entry = await getQueueStatus(n.entryId);
-              return entry?.deviceId === deviceId ? n : null;
-            })
-          )
-        ).filter(Boolean)
-      : pendingNotifications;
+      ? await getPendingNotificationsForDevice(String(deviceId), { getQueueStatus })
+      : await getPendingNotificationsForDevice(null, { getQueueStatus });
 
     res.json(relevant);
   } catch (err) {
@@ -298,13 +283,7 @@ app.get('/notifications/pending', async (req, res) => {
 
 app.delete('/notifications/pending', (req, res) => {
   const { ids } = req.body;
-  if (Array.isArray(ids)) {
-    for (let i = pendingNotifications.length - 1; i >= 0; i--) {
-      if (ids.includes(pendingNotifications[i].id)) {
-        pendingNotifications.splice(i, 1);
-      }
-    }
-  }
+  clearPendingNotifications(ids);
   res.json({ cleared: true });
 });
 

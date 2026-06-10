@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { useEffect, useRef } from 'react';
 
 const shownNotificationIds = new Set<string>();
+export const handledVoiceCallIds = new Set<number>();
 
 export function useQueueNotifications(deviceId: string | null) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -16,12 +17,29 @@ export function useQueueNotifications(deviceId: string | null) {
         const newOnes = pending.filter((n) => !shownNotificationIds.has(n.id));
 
         for (const notification of newOnes) {
+          if (notification.type === 'voice_call_ready' && notification.callId) {
+            if (handledVoiceCallIds.has(notification.callId)) {
+              shownNotificationIds.add(notification.id);
+              continue;
+            }
+          }
+
           shownNotificationIds.add(notification.id);
+
+          const isVoiceCall = notification.type === 'voice_call_ready';
           await Notifications.scheduleNotificationAsync({
             content: {
-              title: 'Queue Update',
-              body: notification.message,
-              data: { entryId: notification.entryId, type: notification.type },
+              title: isVoiceCall
+                ? notification.restaurantName || 'RushHR'
+                : 'Queue Update',
+              body: isVoiceCall ? 'Your update is ready' : notification.message,
+              data: isVoiceCall
+                ? {
+                    type: notification.type,
+                    callId: notification.callId,
+                    restaurantId: notification.restaurantId,
+                  }
+                : { entryId: notification.entryId, type: notification.type },
             },
             trigger: null,
           });

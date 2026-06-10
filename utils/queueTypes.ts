@@ -58,10 +58,15 @@ export type JoinQueuePayload = {
 
 export type QueueNotification = {
   id: string;
-  entryId: number;
   type: string;
   message: string;
   createdAt: string;
+  entryId?: number;
+  callId?: number;
+  deviceId?: string;
+  restaurantId?: number;
+  restaurantName?: string;
+  question?: string;
 };
 
 export type VerifyCodeResult = {

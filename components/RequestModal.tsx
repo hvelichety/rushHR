@@ -77,7 +77,7 @@ export default function RequestModal({
           <View style={styles.handle} />
           <Text style={styles.title}>
             {callStatus === 'completed'
-              ? '✅ Answer ready'
+              ? '✅ Your update is ready'
               : callStatus === 'failed'
                 ? '❌ Call issue'
                 : '📞 Calling restaurant'}
@@ -97,7 +97,7 @@ export default function RequestModal({
           ) : answerSummary ? (
             <ScrollView style={styles.answerScroll} nestedScrollEnabled>
               <Text style={styles.answerLabel}>
-                {callStatus === 'completed' ? 'Answer' : 'Update'}
+                {callStatus === 'completed' ? 'What they said' : 'Update'}
               </Text>
               <Text style={styles.answerBox}>{answerSummary}</Text>
             </ScrollView>

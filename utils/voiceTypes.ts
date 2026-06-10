@@ -10,6 +10,8 @@ export type VoiceCall = {
   transcript?: string | null;
   waitMinutes?: number | null;
   errorMessage?: string | null;
+  destinationPhone?: string | null;
+  fromPhoneNumber?: string | null;
   deviceId?: string | null;
   createdAt: string;
   completedAt?: string | null;
