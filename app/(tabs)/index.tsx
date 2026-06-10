@@ -21,7 +21,7 @@ import FilterModal from "../../components/FilterModal";
 import RequestModal from "../../components/RequestModal";
 import RestaurantCard from "../../components/RestaurantCard";
 import { fetchRestaurant } from "../../utils/api";
-import { createRestaurantCall, pollVoiceCallUntilDone } from "../../utils/voiceApi";
+import { createRestaurantCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
 import { API_BASE_URL, NEARBY_RADIUS_MILES } from "../../utils/config";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
@@ -520,6 +520,14 @@ useEffect(() => {
     setLoadingRestaurantId(r.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    const configError = getVoiceApiConfigError();
+    if (configError) {
+      Toast.show({ type: 'error', text1: 'Voice API not configured', text2: configError });
+      setLoadingRestaurantId(null);
+      setPlacingCall(false);
+      return;
+    }
+
     try {
       const call = await createRestaurantCall({
         restaurantId: Number(r.id),
@@ -527,6 +535,10 @@ useEffect(() => {
         deviceId: deviceIdRef.current ?? undefined,
         pushToken: pushTokenRef.current ?? undefined,
       });
+
+      if (!call.vapiCallId) {
+        throw new Error('Server accepted the request but Vapi did not confirm a call.');
+      }
 
       setAskModalOpen(false);
       setRequested(r);
@@ -597,10 +609,11 @@ useEffect(() => {
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Still waiting for an answer';
-          setCallStatus('calling');
+          setCallStatus('failed');
+          setAnswerSummary(message);
           Toast.show({
-            type: 'info',
-            text1: 'Still on the line',
+            type: 'error',
+            text1: 'Call did not finish',
             text2: message,
           });
         } finally {
@@ -610,6 +623,8 @@ useEffect(() => {
     } catch (err) {
       console.error('❌ Error placing restaurant call:', err);
       setLoadingRestaurantId(null);
+      setActiveCallRestaurantId(null);
+      setModalOpen(false);
       const message = err instanceof Error ? err.message : 'Please try again';
       Toast.show({
         type: 'error',

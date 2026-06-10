@@ -2,6 +2,8 @@ import { query } from './db.js';
 import { formatPhoneE164 } from './phone.js';
 
 const VAPI_API_URL = 'https://api.vapi.ai/call';
+const VAPI_DIAL_CONFIRM_MS = 18_000;
+const VAPI_DIAL_POLL_MS = 1_500;
 const MAX_QUESTION_LENGTH = 500;
 const MIN_QUESTION_LENGTH = 3;
 const UUID_RE =
@@ -96,6 +98,51 @@ export async function getVoiceCall(callId) {
   }
 
   return mapVoiceCall(row);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isVapiCallDialing(status) {
+  return status === 'queued' || status === 'ringing' || status === 'in-progress' || status === 'forwarding';
+}
+
+async function confirmVapiCallStarted(vapiCallId) {
+  const deadline = Date.now() + VAPI_DIAL_CONFIRM_MS;
+
+  while (Date.now() < deadline) {
+    const call = await fetchVapiCallRecord(vapiCallId);
+    if (!call) {
+      await sleep(VAPI_DIAL_POLL_MS);
+      continue;
+    }
+
+    if (call.status === 'ended') {
+      const reason = call.endedReason || call.endReason || 'ended immediately';
+      throw new Error(`Call failed to start (${reason})`);
+    }
+
+    if (call.status === 'ringing' || call.status === 'in-progress' || call.status === 'forwarding') {
+      return call.status;
+    }
+
+    if (call.status === 'queued') {
+      await sleep(VAPI_DIAL_POLL_MS);
+      continue;
+    }
+
+    await sleep(VAPI_DIAL_POLL_MS);
+  }
+
+  const last = await fetchVapiCallRecord(vapiCallId);
+  if (last && isVapiCallDialing(last.status)) {
+    return last.status;
+  }
+
+  throw new Error(
+    'Call was accepted but never started dialing. Check Vapi credits, phone number, and assistant config.'
+  );
 }
 
 async function fetchVapiCallRecord(vapiCallId) {
@@ -376,6 +423,20 @@ export async function createVoiceCall({
      RETURNING *`,
     [callRecord.id, vapiCallId]
   );
+
+  try {
+    await confirmVapiCallStarted(vapiCallId);
+  } catch (err) {
+    await query(
+      `UPDATE voice_calls
+       SET status = 'failed', error_message = $2, completed_at = NOW()
+       WHERE id = $1`,
+      [callRecord.id, err.message]
+    );
+    throw err;
+  }
+
+  console.log(`📞 Vapi call started: ${vapiCallId} → ${destinationPhone}`);
 
   return mapVoiceCall(updatedRows[0]);
 }
