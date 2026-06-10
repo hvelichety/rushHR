@@ -86,6 +86,7 @@ export default function HomeScreen() {
   const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
   const [callStatus, setCallStatus] = useState<'calling' | 'completed' | 'failed'>('calling');
   const [answerSummary, setAnswerSummary] = useState<string | null>(null);
+  const [placingCall, setPlacingCall] = useState(false);
   const [activeCallRestaurantId, setActiveCallRestaurantId] = useState<number | null>(null);
 
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
