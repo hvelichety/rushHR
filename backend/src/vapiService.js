@@ -1,8 +1,26 @@
 import { query } from './db.js';
+import { formatPhoneE164 } from './phone.js';
 
 const VAPI_API_URL = 'https://api.vapi.ai/call';
 const MAX_QUESTION_LENGTH = 500;
 const MIN_QUESTION_LENGTH = 3;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function cleanEnvValue(value) {
+  return value?.trim().replace(/\.+$/, '') ?? '';
+}
+
+function formatVapiError(data) {
+  if (Array.isArray(data?.message)) return data.message.join('; ');
+  if (typeof data?.message === 'string' && data.message.trim()) return data.message;
+  if (typeof data?.error === 'string' && data.error.trim()) return data.error;
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return 'Unknown Vapi error';
+  }
+}
 
 function mapVoiceCall(row) {
   if (!row) return null;
@@ -22,14 +40,31 @@ function mapVoiceCall(row) {
   };
 }
 
-function assertVapiConfigured() {
+function getVapiConfig() {
+  const apiKey = cleanEnvValue(process.env.VAPI_API_KEY);
+  const assistantId = cleanEnvValue(process.env.VAPI_ASSISTANT_ID);
+  const phoneNumberId = cleanEnvValue(process.env.VAPI_PHONE_NUMBER_ID);
+
   const missing = [];
-  if (!process.env.VAPI_API_KEY) missing.push('VAPI_API_KEY');
-  if (!process.env.VAPI_ASSISTANT_ID) missing.push('VAPI_ASSISTANT_ID');
-  if (!process.env.VAPI_PHONE_NUMBER_ID) missing.push('VAPI_PHONE_NUMBER_ID');
+  if (!apiKey) missing.push('VAPI_API_KEY');
+  if (!assistantId) missing.push('VAPI_ASSISTANT_ID');
+  if (!phoneNumberId) missing.push('VAPI_PHONE_NUMBER_ID');
   if (missing.length) {
     throw new Error(`Voice calling is not configured (${missing.join(', ')})`);
   }
+
+  if (!UUID_RE.test(assistantId)) {
+    throw new Error(
+      'VAPI_ASSISTANT_ID looks invalid — copy the full UUID from Vapi (no trailing ...)'
+    );
+  }
+  if (!UUID_RE.test(phoneNumberId)) {
+    throw new Error(
+      'VAPI_PHONE_NUMBER_ID looks invalid — copy the full UUID from Vapi (no trailing ...)'
+    );
+  }
+
+  return { apiKey, assistantId, phoneNumberId };
 }
 
 function normalizeQuestion(text) {
@@ -62,7 +97,7 @@ export async function createVoiceCall({
   deviceId,
   pushToken,
 }) {
-  assertVapiConfigured();
+  const vapiConfig = getVapiConfig();
 
   const question = normalizeQuestion(questionForRestaurant);
   if (question.length < MIN_QUESTION_LENGTH) {
@@ -74,7 +109,10 @@ export async function createVoiceCall({
 
   const restaurant = await getRestaurantById(restaurantId);
   if (!restaurant) throw new Error('Restaurant not found');
-  if (!restaurant.phone?.trim()) throw new Error('Restaurant has no phone number on file');
+  const destinationPhone = formatPhoneE164(restaurant.phone);
+  if (!destinationPhone) {
+    throw new Error('Restaurant phone number is missing or invalid');
+  }
 
   const { rows } = await query(
     `INSERT INTO voice_calls
@@ -86,9 +124,9 @@ export async function createVoiceCall({
   const callRecord = rows[0];
 
   const payload = {
-    assistantId: process.env.VAPI_ASSISTANT_ID,
-    phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
-    customer: { number: restaurant.phone.trim() },
+    assistantId: vapiConfig.assistantId,
+    phoneNumberId: vapiConfig.phoneNumberId,
+    customer: { number: destinationPhone },
     assistantOverrides: {
       variableValues: {
         restaurant_name: restaurant.name,
@@ -97,15 +135,10 @@ export async function createVoiceCall({
     },
   };
 
-  const webhookUrl = process.env.VAPI_WEBHOOK_URL?.trim();
-  if (webhookUrl) {
-    payload.serverUrl = webhookUrl;
-  }
-
   const response = await fetch(VAPI_API_URL, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.VAPI_API_KEY}`,
+      Authorization: `Bearer ${vapiConfig.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -119,10 +152,10 @@ export async function createVoiceCall({
   }
 
   if (!response.ok) {
-    const message =
-      (typeof data.message === 'string' && data.message) ||
-      (typeof data.error === 'string' && data.error) ||
-      `Vapi request failed (${response.status})`;
+    const message = formatVapiError(data) || `Vapi request failed (${response.status})`;
+    const err = new Error(message);
+    err.vapiStatus = response.status;
+    err.vapiDetails = data;
 
     await query(
       `UPDATE voice_calls
@@ -130,7 +163,7 @@ export async function createVoiceCall({
        WHERE id = $1`,
       [callRecord.id, message]
     );
-    throw new Error(message);
+    throw err;
   }
 
   const vapiCallId = data.id || data.call?.id;

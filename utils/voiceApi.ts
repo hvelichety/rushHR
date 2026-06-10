@@ -33,9 +33,20 @@ async function voiceFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const msg =
+    let msg =
       (typeof data.error === 'string' && data.error) ||
       `Request failed (${response.status})`;
+
+    const vapiDetails = data.vapiDetails as Record<string, unknown> | undefined;
+    if (vapiDetails) {
+      const vapiMessage = vapiDetails.message;
+      if (Array.isArray(vapiMessage)) {
+        msg = vapiMessage.join('; ');
+      } else if (typeof vapiMessage === 'string' && vapiMessage.trim()) {
+        msg = vapiMessage;
+      }
+    }
+
     throw new Error(msg);
   }
 

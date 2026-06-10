@@ -71,7 +71,9 @@ app.post('/calls', async (req, res) => {
 
     res.status(201).json(call);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    const body = { error: err.message };
+    if (err.vapiDetails) body.vapiDetails = err.vapiDetails;
+    res.status(400).json(body);
   }
 });
 
