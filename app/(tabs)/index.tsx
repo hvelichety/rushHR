@@ -540,6 +540,7 @@ useEffect(() => {
           .slice(0, 3)
       );
       setModalOpen(true);
+      setLoadingRestaurantId(null);
 
       Toast.show({
         type: 'success',
@@ -601,8 +602,6 @@ useEffect(() => {
             text1: 'Still on the line',
             text2: message,
           });
-        } finally {
-          setLoadingRestaurantId(null);
         }
       })();
     } catch (err) {

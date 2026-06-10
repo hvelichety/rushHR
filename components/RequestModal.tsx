@@ -1,9 +1,11 @@
 import React, { useEffect } from "react";
 import {
+  ActivityIndicator,
   Animated,
   Dimensions,
   FlatList,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -85,21 +87,36 @@ export default function RequestModal({
               Asking: <Text style={{ fontWeight: '700' }}>{question}</Text>
             </Text>
           ) : null}
-          {callStatus === 'completed' && answerSummary ? (
-            <Text style={styles.answerBox}>{answerSummary}</Text>
+          {callStatus === 'calling' ? (
+            <View style={styles.callingRow}>
+              <ActivityIndicator color="#F45B5B" />
+              <Text style={styles.subtitle}>
+                Our AI is on the phone with {requested.name}. This usually takes 1-3 minutes.
+              </Text>
+            </View>
+          ) : answerSummary ? (
+            <ScrollView style={styles.answerScroll} nestedScrollEnabled>
+              <Text style={styles.answerLabel}>
+                {callStatus === 'completed' ? 'Answer' : 'Update'}
+              </Text>
+              <Text style={styles.answerBox}>{answerSummary}</Text>
+            </ScrollView>
           ) : (
             <Text style={styles.subtitle}>
               {callStatus === 'failed'
                 ? answerSummary ||
                   `We couldn't get an answer from ${requested.name}. Try again in a moment.`
-                : `Our AI is calling ${requested.name} now. Usually takes 1-3 minutes.`}
+                : `Waiting for an answer from ${requested.name}...`}
             </Text>
           )}
 
-          <Text style={[styles.subtitle, { marginTop: 12 }]}>
-            Meanwhile, check out these similar spots 🍴
-          </Text>
+          {callStatus === 'calling' ? null : (
+            <Text style={[styles.subtitle, { marginTop: 12 }]}>
+              Meanwhile, check out these similar spots 🍴
+            </Text>
+          )}
 
+          {callStatus === 'calling' ? null : (
           <FlatList
             data={recommendations}
             keyExtractor={(item) => item.id.toString()}
@@ -140,6 +157,7 @@ export default function RequestModal({
             }
             contentContainerStyle={{ marginTop: 10 }}
           />
+          )}
 
           <TouchableOpacity style={styles.button} onPress={onClose}>
             <Text style={styles.buttonText}>Got it</Text>
@@ -198,9 +216,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#0F172A",
     lineHeight: 24,
+    fontWeight: "500",
+  },
+  answerLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#64748B",
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  answerScroll: {
+    maxHeight: 180,
     marginTop: 8,
     marginBottom: 4,
-    fontWeight: "500",
+  },
+  callingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
   },
   card: {
     backgroundColor: "#F8FAFC",

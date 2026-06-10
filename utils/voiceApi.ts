@@ -71,7 +71,7 @@ export async function pollVoiceCallUntilDone(
   options?: { timeoutMs?: number; intervalMs?: number }
 ): Promise<VoiceCall> {
   const timeoutMs = options?.timeoutMs ?? 180_000;
-  const intervalMs = options?.intervalMs ?? 4_000;
+  const intervalMs = options?.intervalMs ?? 3_000;
   const started = Date.now();
 
   while (Date.now() - started < timeoutMs) {

@@ -88,7 +88,171 @@ async function getRestaurantById(restaurantId) {
 
 export async function getVoiceCall(callId) {
   const { rows } = await query('SELECT * FROM voice_calls WHERE id = $1', [callId]);
-  return mapVoiceCall(rows[0]);
+  if (!rows[0]) return null;
+
+  let row = rows[0];
+  if (row.status === 'dialing' || row.status === 'in_progress') {
+    row = (await syncVoiceCallFromVapi(row)) ?? row;
+  }
+
+  return mapVoiceCall(row);
+}
+
+async function fetchVapiCallRecord(vapiCallId) {
+  const { apiKey } = getVapiConfig();
+  const response = await fetch(`https://api.vapi.ai/call/${vapiCallId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+
+  if (!response.ok) return null;
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function buildAnswerFromMessages(messages) {
+  if (!Array.isArray(messages)) return null;
+
+  const userLines = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => (m.message || m.content || m.text || '').trim())
+    .filter(Boolean);
+
+  if (userLines.length === 0) return null;
+  return userLines.slice(-4).join(' ');
+}
+
+function buildAnswerFromTranscript(transcript) {
+  if (!transcript?.trim()) return null;
+
+  const lines = transcript.split('\n').filter(Boolean);
+  const userLines = lines
+    .map((line) => {
+      const match = line.match(/^(?:user|customer)\s*:\s*(.+)$/i);
+      return match?.[1]?.trim() ?? null;
+    })
+    .filter(Boolean);
+
+  if (userLines.length > 0) return userLines.slice(-4).join(' ');
+
+  return lines.slice(-4).join(' ').trim().slice(0, 600) || null;
+}
+
+function extractAnswerFromVapiPayload(vapiCall, question) {
+  const analysisSummary = vapiCall.analysis?.summary;
+  if (typeof analysisSummary === 'string' && analysisSummary.trim()) {
+    return analysisSummary.trim();
+  }
+
+  const topSummary = vapiCall.summary;
+  if (typeof topSummary === 'string' && topSummary.trim()) return topSummary.trim();
+
+  const structured = vapiCall.analysis?.structuredData;
+  if (structured && typeof structured === 'object') {
+    if (typeof structured.answer === 'string' && structured.answer.trim()) {
+      return structured.answer.trim();
+    }
+    if (typeof structured.answerSummary === 'string' && structured.answerSummary.trim()) {
+      return structured.answerSummary.trim();
+    }
+  }
+
+  const fromMessages = buildAnswerFromMessages(vapiCall.artifact?.messages || vapiCall.messages);
+  if (fromMessages) return fromMessages;
+
+  const transcript = vapiCall.artifact?.transcript || vapiCall.transcript;
+  const fromTranscript = buildAnswerFromTranscript(transcript);
+  if (fromTranscript) return fromTranscript;
+
+  if (/wait/i.test(question)) {
+    return 'The call finished, but no wait time was captured. Try asking again.';
+  }
+
+  return 'The call finished, but no clear answer was captured. Try asking again.';
+}
+
+function pickTranscriptFromVapi(vapiCall) {
+  if (typeof vapiCall.artifact?.transcript === 'string') return vapiCall.artifact.transcript;
+  if (typeof vapiCall.transcript === 'string') return vapiCall.transcript;
+  return pickTranscript(vapiCall);
+}
+
+function isVapiCallEnded(vapiCall) {
+  return vapiCall.status === 'ended' || Boolean(vapiCall.endedAt);
+}
+
+async function finalizeVoiceCallRecord(callRecord, { answerSummary, transcript, failed, errorMessage }) {
+  const waitMinutes = extractWaitMinutes(callRecord.question_for_restaurant, answerSummary);
+
+  const { rows } = await query(
+    `UPDATE voice_calls
+     SET status = $2,
+         answer_summary = $3,
+         transcript = COALESCE($4, transcript),
+         wait_minutes = $5,
+         error_message = $6,
+         completed_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [
+      callRecord.id,
+      failed ? 'failed' : 'completed',
+      answerSummary,
+      transcript,
+      waitMinutes,
+      errorMessage ?? null,
+    ]
+  );
+
+  if (waitMinutes !== null) {
+    await query(
+      `UPDATE restaurants
+       SET wait_minutes = $2,
+           last_called_at = NOW()
+       WHERE id = $1`,
+      [callRecord.restaurant_id, waitMinutes]
+    );
+  } else {
+    await query(`UPDATE restaurants SET last_called_at = NOW() WHERE id = $1`, [
+      callRecord.restaurant_id,
+    ]);
+  }
+
+  return rows[0];
+}
+
+async function syncVoiceCallFromVapi(callRecord) {
+  if (!callRecord.vapi_call_id) return callRecord;
+  if (callRecord.status === 'completed' || callRecord.status === 'failed') return callRecord;
+
+  try {
+    const vapiCall = await fetchVapiCallRecord(callRecord.vapi_call_id);
+    if (!vapiCall || !isVapiCallEnded(vapiCall)) return callRecord;
+
+    const transcript = pickTranscriptFromVapi(vapiCall);
+    const endedReason = vapiCall.endedReason || vapiCall.endReason;
+    const failed =
+      Boolean(endedReason) &&
+      /fail|error|busy|no-answer|voicemail|machine/i.test(String(endedReason));
+
+    const answerSummary = failed
+      ? `Call ended (${endedReason}). No answer was captured.`
+      : extractAnswerFromVapiPayload(vapiCall, callRecord.question_for_restaurant);
+
+    return (
+      (await finalizeVoiceCallRecord(callRecord, {
+        answerSummary,
+        transcript,
+        failed,
+        errorMessage: failed ? String(endedReason) : null,
+      })) ?? callRecord
+    );
+  } catch (err) {
+    console.error('Vapi sync failed:', err.message);
+    return callRecord;
+  }
 }
 
 export async function createVoiceCall({
@@ -212,7 +376,28 @@ function pickSummary(message) {
   if (typeof message.artifact?.summary === 'string' && message.artifact.summary.trim()) {
     return message.artifact.summary.trim();
   }
+  if (typeof message.call?.analysis?.summary === 'string' && message.call.analysis.summary.trim()) {
+    return message.call.analysis.summary.trim();
+  }
   return null;
+}
+
+function buildAnswerFromWebhook(message, question) {
+  const summary = pickSummary(message);
+  if (summary) return summary;
+
+  const transcript = pickTranscript(message);
+  const fromTranscript = buildAnswerFromTranscript(transcript);
+  if (fromTranscript) return fromTranscript;
+
+  const fromMessages = buildAnswerFromMessages(message.artifact?.messages || message.messages);
+  if (fromMessages) return fromMessages;
+
+  if (/wait/i.test(question)) {
+    return 'The call finished, but no wait time was captured. Try asking again.';
+  }
+
+  return 'The call finished, but no clear answer was captured. Try asking again.';
 }
 
 export async function handleVapiWebhook(body) {
@@ -241,53 +426,24 @@ export async function handleVapiWebhook(body) {
   }
 
   if (type === 'end-of-call-report') {
-    const summary = pickSummary(message);
     const transcript = pickTranscript(message);
     const endedReason = message.endedReason || message.call?.endedReason;
-    const failed = endedReason && /fail|error|busy|no-answer|voicemail/i.test(String(endedReason));
+    const failed =
+      Boolean(endedReason) &&
+      /fail|error|busy|no-answer|voicemail|machine/i.test(String(endedReason));
 
-    const answerSummary =
-      summary ||
-      (failed
-        ? `Call ended (${endedReason}). No answer was captured.`
-        : 'Call completed, but no summary was returned.');
+    const answerSummary = failed
+      ? `Call ended (${endedReason}). No answer was captured.`
+      : buildAnswerFromWebhook(message, callRecord.question_for_restaurant);
 
-    const waitMinutes = extractWaitMinutes(callRecord.question_for_restaurant, answerSummary);
+    const updated = await finalizeVoiceCallRecord(callRecord, {
+      answerSummary,
+      transcript,
+      failed,
+      errorMessage: failed ? String(endedReason) : null,
+    });
 
-    await query(
-      `UPDATE voice_calls
-       SET status = $2,
-           answer_summary = $3,
-           transcript = COALESCE($4, transcript),
-           wait_minutes = $5,
-           error_message = $6,
-           completed_at = NOW()
-       WHERE id = $1`,
-      [
-        callRecord.id,
-        failed ? 'failed' : 'completed',
-        answerSummary,
-        transcript,
-        waitMinutes,
-        failed ? String(endedReason) : null,
-      ]
-    );
-
-    if (waitMinutes !== null) {
-      await query(
-        `UPDATE restaurants
-         SET wait_minutes = $2,
-             last_called_at = NOW()
-         WHERE id = $1`,
-        [callRecord.restaurant_id, waitMinutes]
-      );
-    } else {
-      await query(`UPDATE restaurants SET last_called_at = NOW() WHERE id = $1`, [
-        callRecord.restaurant_id,
-      ]);
-    }
-
-    return { handled: true, type, callId: callRecord.id };
+    return { handled: true, type, callId: updated.id };
   }
 
   return { handled: true, type, ignored: true };
