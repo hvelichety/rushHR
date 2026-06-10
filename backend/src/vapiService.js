@@ -76,6 +76,35 @@ function normalizeQuestion(text) {
   return text?.trim().replace(/\s+/g, ' ') ?? '';
 }
 
+function isLikelyOrderRequest(question) {
+  return /\b(order|pickup|pick up|takeout|take out|delivery|for\s+[A-Z][a-z]+|\d+\s+\w)/i.test(
+    question
+  );
+}
+
+function buildCallBehaviorRules(question) {
+  const orderHints = isLikelyOrderRequest(question)
+    ? [
+        '- This looks like a PLACE-ORDER request. When staff asks "anything else?", "is that all?", or similar: the items and name in the request are the COMPLETE order unless the customer text says "at least", "some", "or similar", etc. Reply "No, that\'s everything" or "That\'s the full order."',
+        '- Do NOT re-read the entire order after staff already acknowledged it. Only repeat if they explicitly ask you to repeat or say they did not hear you.',
+      ]
+    : [
+        '- This looks like a QUESTION (not an open-ended order). Answer the specific question, then wrap up — do not invent follow-up items.',
+      ];
+
+  return [
+    'CUSTOMER REQUEST (authoritative — this is everything the app user asked you to say):',
+    `"${question}"`,
+    '',
+    'Rules for this call:',
+    '- Anything explicitly written in the request above is KNOWN (items, quantity, name for pickup, pickup vs delivery, party size, wait-time question, etc.). Never say "I don\'t have that information" or "let me confirm with the customer" for details that are already in that text.',
+    ...orderHints,
+    '- Keep replies short (1–2 sentences). Confirm key facts once at the start, then answer follow-ups without repeating the whole message.',
+    '- If staff asks about something NOT in the request (spice level, sauce, substitutions, allergies, special cooking instructions), say the customer did not specify and to use the restaurant default — do NOT guess.',
+    '- Once staff confirms the order or answers the question, thank them and end the call. Do not loop or restart the pitch.',
+  ].join('\n');
+}
+
 function extractWaitMinutes(question, summary) {
   if (!/wait/i.test(question) || !summary) return null;
   const match = summary.match(/(\d+)\s*(?:min(?:ute)?s?|m\b)/i);
@@ -466,6 +495,7 @@ export async function createVoiceCall({
       variableValues: {
         restaurant_name: restaurant.name,
         user_question: question,
+        call_behavior_rules: buildCallBehaviorRules(question),
       },
       voicemailMessage: '',
       analysisPlan: {

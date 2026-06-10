@@ -24,6 +24,16 @@ On the **queue service** (not Postgres), add:
 
 Also set the same webhook URL on the Vapi assistant (**Advanced → Server URL**).
 
+### Vapi system prompt (one-time)
+
+The API sends `call_behavior_rules` on every call so the agent handles "anything else?" without re-reading the whole order. Add this to your **RushHour assistant system prompt** in [dashboard.vapi.ai](https://dashboard.vapi.ai) (near the top, after your role description):
+
+```
+{{call_behavior_rules}}
+```
+
+Keep your existing `{{user_question}}` and `{{restaurant_name}}` variables. Without `{{call_behavior_rules}}` in the dashboard prompt, the backend rules are sent but the model will not see them.
+
 Do **not** commit `backend/.env` — use Railway's variable UI.
 
 ## 3. Deploy & get URL
