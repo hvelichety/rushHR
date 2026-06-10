@@ -86,7 +86,7 @@ export default function HomeScreen() {
   const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
   const [callStatus, setCallStatus] = useState<'calling' | 'completed' | 'failed'>('calling');
   const [answerSummary, setAnswerSummary] = useState<string | null>(null);
-  const [placingCall, setPlacingCall] = useState(false);
+  const [activeCallRestaurantId, setActiveCallRestaurantId] = useState<number | null>(null);
 
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
@@ -541,6 +541,7 @@ useEffect(() => {
       );
       setModalOpen(true);
       setLoadingRestaurantId(null);
+      setActiveCallRestaurantId(r.id);
 
       Toast.show({
         type: 'success',
@@ -602,6 +603,8 @@ useEffect(() => {
             text1: 'Still on the line',
             text2: message,
           });
+        } finally {
+          setActiveCallRestaurantId(null);
         }
       })();
     } catch (err) {
@@ -621,6 +624,7 @@ useEffect(() => {
   const renderItem = ({ item }: { item: Restaurant }) => {
     const minsSinceUpdate = minutesSince(item.lastUpdatedAt);
     const isLoading = loadingRestaurantId === item.id;
+    const isOnCall = activeCallRestaurantId === item.id;
 
     return (
       <RestaurantCard
@@ -630,6 +634,7 @@ useEffect(() => {
         cooldownSeconds={0}
         canRequest={true}
         isLoading={isLoading}
+        isOnCall={isOnCall}
         onRequest={() => handleOpenAsk(item)}
       />
     );

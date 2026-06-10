@@ -183,6 +183,21 @@ function isVapiCallEnded(vapiCall) {
   return vapiCall.status === 'ended' || Boolean(vapiCall.endedAt);
 }
 
+function isVapiCallFailureReason(endedReason) {
+  if (!endedReason) return false;
+  const reason = String(endedReason).toLowerCase();
+  return (
+    reason.includes('fail') ||
+    reason.includes('error') ||
+    reason.includes('busy') ||
+    reason.includes('no-answer') ||
+    reason.includes('no answer') ||
+    reason.includes('voicemail') ||
+    reason.includes('machine') ||
+    reason.includes('unanswered')
+  );
+}
+
 async function finalizeVoiceCallRecord(callRecord, { answerSummary, transcript, failed, errorMessage }) {
   const waitMinutes = extractWaitMinutes(callRecord.question_for_restaurant, answerSummary);
 
@@ -227,15 +242,16 @@ async function syncVoiceCallFromVapi(callRecord) {
   if (!callRecord.vapi_call_id) return callRecord;
   if (callRecord.status === 'completed' || callRecord.status === 'failed') return callRecord;
 
+  const callAgeMs = Date.now() - new Date(callRecord.created_at).getTime();
+  if (callAgeMs < 10_000) return callRecord;
+
   try {
     const vapiCall = await fetchVapiCallRecord(callRecord.vapi_call_id);
     if (!vapiCall || !isVapiCallEnded(vapiCall)) return callRecord;
 
     const transcript = pickTranscriptFromVapi(vapiCall);
     const endedReason = vapiCall.endedReason || vapiCall.endReason;
-    const failed =
-      Boolean(endedReason) &&
-      /fail|error|busy|no-answer|voicemail|machine/i.test(String(endedReason));
+    const failed = isVapiCallFailureReason(endedReason);
 
     const answerSummary = failed
       ? `Call ended (${endedReason}). No answer was captured.`
@@ -341,6 +357,18 @@ export async function createVoiceCall({
     throw new Error('Call was not placed. No confirmation from Vapi.');
   }
 
+  if (data.status === 'ended') {
+    const reason = data.endedReason || data.endReason || 'unknown';
+    const message = `Call could not connect (${reason})`;
+    await query(
+      `UPDATE voice_calls
+       SET status = 'failed', error_message = $2, vapi_call_id = $3, completed_at = NOW()
+       WHERE id = $1`,
+      [callRecord.id, message, vapiCallId]
+    );
+    throw new Error(message);
+  }
+
   const { rows: updatedRows } = await query(
     `UPDATE voice_calls
      SET vapi_call_id = $2, status = 'in_progress'
@@ -428,9 +456,7 @@ export async function handleVapiWebhook(body) {
   if (type === 'end-of-call-report') {
     const transcript = pickTranscript(message);
     const endedReason = message.endedReason || message.call?.endedReason;
-    const failed =
-      Boolean(endedReason) &&
-      /fail|error|busy|no-answer|voicemail|machine/i.test(String(endedReason));
+    const failed = isVapiCallFailureReason(endedReason);
 
     const answerSummary = failed
       ? `Call ended (${endedReason}). No answer was captured.`

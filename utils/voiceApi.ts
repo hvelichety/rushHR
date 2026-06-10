@@ -68,11 +68,14 @@ export async function fetchVoiceCall(callId: number): Promise<VoiceCall> {
 
 export async function pollVoiceCallUntilDone(
   callId: number,
-  options?: { timeoutMs?: number; intervalMs?: number }
+  options?: { timeoutMs?: number; intervalMs?: number; initialDelayMs?: number }
 ): Promise<VoiceCall> {
   const timeoutMs = options?.timeoutMs ?? 180_000;
   const intervalMs = options?.intervalMs ?? 3_000;
+  const initialDelayMs = options?.initialDelayMs ?? 5_000;
   const started = Date.now();
+
+  await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
 
   while (Date.now() - started < timeoutMs) {
     const call = await fetchVoiceCall(callId);

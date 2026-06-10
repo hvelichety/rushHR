@@ -15,6 +15,7 @@ type Props = {
   cooldownSeconds: number;
   canRequest: boolean;
   isLoading?: boolean;
+  isOnCall?: boolean;
   onRequest: () => void;
 };
 
@@ -25,6 +26,7 @@ export default function RestaurantCard({
   cooldownSeconds: _cooldownSeconds,
   canRequest: _canRequest,
   isLoading = false,
+  isOnCall = false,
   onRequest,
 }: Props) {
   const { name, cuisine, waitMinutes, image, distance_miles, city, state } = restaurant;
@@ -117,14 +119,23 @@ export default function RestaurantCard({
           }}
           style={({ pressed }) => [
             styles.button,
-            pressed && styles.buttonPressed,
+            (isLoading || isOnCall) && styles.buttonDisabled,
+            pressed && !(isLoading || isOnCall) && styles.buttonPressed,
           ]}
+          disabled={isLoading || isOnCall}
         >
           {isLoading ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator color="#FFFFFF" size="small" />
               <Text style={[styles.buttonText, { marginLeft: 8 }]}>
-                Calling...
+                Placing call...
+              </Text>
+            </View>
+          ) : isOnCall ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator color="#FFFFFF" size="small" />
+              <Text style={[styles.buttonText, { marginLeft: 8 }]}>
+                On a call...
               </Text>
             </View>
           ) : (
