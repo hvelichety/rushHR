@@ -1,4 +1,4 @@
-import { API_BASE_URL, API_KEY } from "./config";
+import { API_BASE_URL, API_KEY, RESTAURANT_API_BASE_URL } from "./config";
 import { Restaurant } from "./types";
 
 export type RequestWaitTimeOptions = {
@@ -82,7 +82,7 @@ export async function requestWaitTime(
  */
 export async function fetchRestaurant(id: number): Promise<any | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/restaurants/${id}`);
+    const response = await fetch(`${RESTAURANT_API_BASE_URL}/restaurants/${id}`);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -106,7 +106,7 @@ export async function fetchAllRestaurants(
   radius?: number
 ): Promise<Restaurant[] | null> {
   try {
-    let url = `${API_BASE_URL}/restaurants`;
+    let url = `${RESTAURANT_API_BASE_URL}/restaurants`;
     const params = new URLSearchParams();
 
     if (lat !== undefined && lng !== undefined) {

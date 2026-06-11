@@ -26,6 +26,8 @@ import {
   getPendingNotificationsForDevice,
 } from './notificationQueue.js';
 import { createVoiceCall, getVoiceCall, getVoiceCallsForDevice, handleVapiWebhook } from './vapiService.js';
+import { getRestaurantById, listRestaurants } from './restaurantService.js';
+import { syncRestaurantsFromYelp } from './restaurantDiscovery.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -97,6 +99,61 @@ app.post('/webhooks/vapi', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error('Vapi webhook error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/restaurants', async (req, res) => {
+  try {
+    const { restaurants, discovery } = await listRestaurants({
+      lat: req.query.lat,
+      lng: req.query.lng,
+      radius: req.query.radius,
+      q: req.query.q,
+      city: req.query.city,
+      location: req.query.location,
+      cuisine: req.query.cuisine,
+      sort: req.query.sort,
+      sync: req.query.sync,
+    });
+
+    if (discovery?.imported != null && !discovery.skipped) {
+      res.set('X-Restaurants-Imported', String(discovery.imported));
+    }
+    if (discovery?.error) {
+      res.set('X-Restaurants-Sync-Error', discovery.error);
+    }
+
+    res.json(restaurants);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/restaurants/sync', async (req, res) => {
+  try {
+    const { lat, lng, location, force } = { ...req.query, ...req.body };
+    const result = await syncRestaurantsFromYelp({
+      lat,
+      lng,
+      location,
+      force: force === true || force === '1' || force === 'true' || force === 'force',
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/restaurants/:id', async (req, res) => {
+  try {
+    const restaurant = await getRestaurantById(Number(req.params.id), {
+      lat: req.query.lat,
+      lng: req.query.lng,
+    });
+    if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+    res.json(restaurant);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

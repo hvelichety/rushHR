@@ -23,7 +23,7 @@ import RestaurantCard from "../../components/RestaurantCard";
 import UpdatesFeed from "../../components/UpdatesFeed";
 import { fetchRestaurant } from "../../utils/api";
 import { createRestaurantCall, fetchVoiceCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
-import { API_BASE_URL, NEARBY_RADIUS_MILES } from "../../utils/config";
+import { API_BASE_URL, NEARBY_RADIUS_MILES, RESTAURANT_API_BASE_URL } from "../../utils/config";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
 const EventSource = EventSourcePolyfill;
@@ -34,21 +34,32 @@ import {
   UserLocation,
 } from "../../utils/location";
 
-/** lat/lng for distance; radius=30 only when "Nearby Only" — backend returns all restaurants otherwise */
+/** lat/lng for distance; sync=1 pulls from Yelp; radius only when "Nearby Only" */
 function buildRestaurantsUrl(
   userLocation: UserLocation | null,
-  showNearbyOnly: boolean
+  showNearbyOnly: boolean,
+  options?: { sync?: boolean; location?: string }
 ): string {
-  let url = `${API_BASE_URL}/restaurants`;
-  if (!userLocation) return url;
-  const params = new URLSearchParams({
-    lat: String(userLocation.latitude),
-    lng: String(userLocation.longitude),
-  });
-  if (showNearbyOnly) {
+  let url = `${RESTAURANT_API_BASE_URL}/restaurants`;
+  const params = new URLSearchParams();
+
+  if (options?.sync !== false) {
+    params.set("sync", "1");
+  }
+
+  if (options?.location?.trim()) {
+    params.set("location", options.location.trim());
+  } else if (userLocation) {
+    params.set("lat", String(userLocation.latitude));
+    params.set("lng", String(userLocation.longitude));
+  }
+
+  if (showNearbyOnly && userLocation) {
     params.set("radius", String(NEARBY_RADIUS_MILES));
   }
-  return `${url}?${params.toString()}`;
+
+  const qs = params.toString();
+  return qs ? `${url}?${qs}` : url;
 }
 
 import {
@@ -96,6 +107,7 @@ export default function HomeScreen() {
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
+  const lastCitySyncRef = useRef<string>("");
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const {
     updates: callUpdates,
@@ -575,7 +587,7 @@ useEffect(() => {
     return ["All", ...Array.from(cuisines).sort()];
   }, [restaurants]);
 
-  // Search, cuisine, and nearby filter
+  // Search, cuisine, nearby filter — list stays global; distance only sorts / optional radius filter
   const filtered = useMemo(() => {
     let result = restaurants;
     const q = query.trim().toLowerCase();
@@ -597,12 +609,72 @@ useEffect(() => {
       result = result.filter(
         (r) =>
           r.name.toLowerCase().includes(q) ||
-          (r.cuisine && r.cuisine.toLowerCase().includes(q))
+          (r.cuisine && r.cuisine.toLowerCase().includes(q)) ||
+          (r.city && r.city.toLowerCase().includes(q)) ||
+          (r.state && r.state.toLowerCase().includes(q))
       );
+    }
+
+    if (userLocation && !showNearbyOnly) {
+      result = [...result].sort((a, b) => {
+        const da = a.distance_miles;
+        const db = b.distance_miles;
+        if (da == null && db == null) return a.name.localeCompare(b.name);
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return da - db;
+      });
     }
 
     return result;
   }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
+
+  useEffect(() => {
+    lastCitySyncRef.current = "";
+  }, [query]);
+
+  // When searching a city with no local matches, discover restaurants there via Yelp
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 3 || filtered.length > 0) return;
+
+    const key = q.toLowerCase();
+    if (lastCitySyncRef.current === key) return;
+
+    const timer = setTimeout(async () => {
+      lastCitySyncRef.current = key;
+      try {
+        const url = buildRestaurantsUrl(userLocation, false, { sync: true, location: q });
+        const res = await fetch(url);
+        if (!res.ok) return;
+
+        const raw = await res.json();
+        const restaurantArray = Array.isArray(raw)
+          ? raw
+          : Array.isArray(raw?.data)
+            ? raw.data
+            : [];
+
+        if (restaurantArray.length === 0) return;
+
+        const incoming: Restaurant[] = restaurantArray.map((r: Record<string, unknown>) =>
+          mapApiRestaurant(r)
+        );
+
+        setRestaurants((prev) => {
+          const byId = new Map(prev.map((r) => [r.id, r]));
+          for (const r of incoming) {
+            byId.set(r.id, { ...byId.get(r.id), ...r });
+          }
+          return Array.from(byId.values());
+        });
+      } catch (err) {
+        console.warn("City restaurant discovery failed:", err);
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [query, filtered.length, userLocation, mapApiRestaurant]);
 
   const handleOpenAsk = (r: Restaurant) => {
     setSelectedRestaurant(r);
@@ -763,7 +835,9 @@ useEffect(() => {
       <View style={styles.container}>
         <Text style={styles.logo}>🍽️ RushHour</Text>
         <Text style={styles.subtitle}>
-          {userLocation ? "What's nearby?" : "Find a restaurant near you"}
+          {userLocation
+            ? "Call-worthy spots near you — search any city when you're on the road"
+            : "Restaurants you can call — enable location to sort by distance"}
         </Text>
 
         {/* Location Permission Banner */}
@@ -790,7 +864,7 @@ useEffect(() => {
 
         <View style={styles.searchWrapper}>
           <TextInput
-            placeholder="Search by name or cuisine"
+            placeholder="Search name, cuisine, or city"
             placeholderTextColor="#94A3B8"
             value={query}
             onChangeText={setQuery}

@@ -13,18 +13,21 @@ const DEV_URLS = {
   web: 'http://localhost:5001',
 };
 
-// ✅ Production URL (set this to your deployed backend)
-// You can also use environment variables: process.env.EXPO_PUBLIC_API_URL
-const PRODUCTION_URL = process.env.EXPO_PUBLIC_API_URL || 'https://web-production-c18ab.up.railway.app';
+// Legacy Flask backend (wait-time /call, SSE stream) — optional
+const LEGACY_API_URL =
+  process.env.EXPO_PUBLIC_API_URL || 'https://web-production-c18ab.up.railway.app';
+
+// Queue + restaurant catalog live on the Node backend (Railway backend/)
+const QUEUE_API_URL = process.env.EXPO_PUBLIC_QUEUE_API_URL?.replace(/\/$/, '');
 
 /**
- * Get the appropriate API URL based on environment
+ * Restaurant list comes from the Node backend (curated, call-worthy only).
+ * Falls back to legacy Flask URL if QUEUE_API_URL is unset.
  */
-function getApiUrl(): string {
-  return PRODUCTION_URL;
-}
+export const RESTAURANT_API_BASE_URL = QUEUE_API_URL || LEGACY_API_URL;
 
-export const API_BASE_URL = getApiUrl();
+/** @deprecated Use RESTAURANT_API_BASE_URL for restaurants; kept for legacy /call and /stream */
+export const API_BASE_URL = LEGACY_API_URL;
 export const API_KEY = process.env.EXPO_PUBLIC_API_KEY;
 
 /** Must match backend: only applied when "Nearby Only" filter is on (query param radius=) */
@@ -41,7 +44,8 @@ export function validateApiUrl(): boolean {
     console.error('❌ EXPO_PUBLIC_API_KEY is not set — /call requests will fail');
   }
 
-  console.log(`✅ API configured: ${API_BASE_URL}`);
+  console.log(`✅ Restaurant API: ${RESTAURANT_API_BASE_URL}`);
+  console.log(`   Legacy API: ${API_BASE_URL}`);
   console.log(`   Environment: ${IS_DEV ? 'Development' : 'Production'}`);
   console.log(`   Platform: ${Platform.OS} (${Constants.isDevice ? 'Device' : 'Simulator'})`);
   console.log(`   API key: ${API_KEY ? '✅ set' : '❌ missing'}`);
@@ -57,4 +61,5 @@ export const ENV_INFO = {
   platform: Platform.OS,
   isDevice: Constants.isDevice,
   apiUrl: API_BASE_URL,
+  restaurantApiUrl: RESTAURANT_API_BASE_URL,
 };
