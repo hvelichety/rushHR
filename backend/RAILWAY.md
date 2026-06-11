@@ -85,12 +85,13 @@ Fast-food chains (Shake Shack, McDonald's, etc.) are filtered out automatically.
 
 The **Queue** tab only shows restaurants with `queue_enabled = true` (your manual partners). Yelp imports default to `queue_enabled = false`.
 
-Enable queue for a restaurant after onboarding:
+Enable queue for a restaurant after onboarding (by name, not hard-coded id):
 
 ```sql
-UPDATE restaurants SET queue_enabled = true WHERE id = 2;
--- or: WHERE LOWER(name) LIKE '%srirangam%';
+UPDATE restaurants SET queue_enabled = true WHERE LOWER(name) LIKE '%srirangam%';
 ```
+
+Queue partners are protected from Yelp renames when two listings share the same phone.
 
 ## 5. You can stop the local server
 

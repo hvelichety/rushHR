@@ -87,7 +87,36 @@ function mapYelpBusiness(business, phoneOverride, { relaxed = false } = {}) {
   return row;
 }
 
+async function findQueuePartnerByPhone(phone) {
+  if (!phone) return null;
+  const { rows } = await query(
+    `SELECT * FROM restaurants WHERE phone = $1 AND queue_enabled IS TRUE LIMIT 1`,
+    [phone]
+  );
+  return rows[0] || null;
+}
+
+/** Yelp must not rename or re-address manual queue partners (same phone, different Yelp listing). */
+async function touchQueuePartnerFromYelp(partnerId, row) {
+  const { rows } = await query(
+    `UPDATE restaurants SET
+      image = COALESCE($1, image),
+      rating = $2,
+      review_count = $3,
+      last_updated_at = $4
+     WHERE id = $5
+     RETURNING *`,
+    [row.image, row.rating, row.review_count, row.last_updated_at, partnerId]
+  );
+  return rows[0];
+}
+
 async function upsertRestaurant(row) {
+  const queuePartner = await findQueuePartnerByPhone(row.phone);
+  if (queuePartner) {
+    return touchQueuePartnerFromYelp(queuePartner.id, row);
+  }
+
   const values = [
     row.yelp_id,
     row.name,
@@ -122,15 +151,15 @@ async function upsertRestaurant(row) {
         $15, $16, $17, $18, $19
       )
       ON CONFLICT (yelp_id) DO UPDATE SET
-        name = EXCLUDED.name,
-        phone = EXCLUDED.phone,
-        cuisine = EXCLUDED.cuisine,
-        latitude = EXCLUDED.latitude,
-        longitude = EXCLUDED.longitude,
-        address = EXCLUDED.address,
-        city = EXCLUDED.city,
-        state = EXCLUDED.state,
-        zip_code = EXCLUDED.zip_code,
+        name = CASE WHEN restaurants.queue_enabled THEN restaurants.name ELSE EXCLUDED.name END,
+        phone = CASE WHEN restaurants.queue_enabled THEN restaurants.phone ELSE EXCLUDED.phone END,
+        cuisine = CASE WHEN restaurants.queue_enabled THEN restaurants.cuisine ELSE EXCLUDED.cuisine END,
+        latitude = CASE WHEN restaurants.queue_enabled THEN restaurants.latitude ELSE EXCLUDED.latitude END,
+        longitude = CASE WHEN restaurants.queue_enabled THEN restaurants.longitude ELSE EXCLUDED.longitude END,
+        address = CASE WHEN restaurants.queue_enabled THEN restaurants.address ELSE EXCLUDED.address END,
+        city = CASE WHEN restaurants.queue_enabled THEN restaurants.city ELSE EXCLUDED.city END,
+        state = CASE WHEN restaurants.queue_enabled THEN restaurants.state ELSE EXCLUDED.state END,
+        zip_code = CASE WHEN restaurants.queue_enabled THEN restaurants.zip_code ELSE EXCLUDED.zip_code END,
         image = COALESCE(EXCLUDED.image, restaurants.image),
         rating = EXCLUDED.rating,
         review_count = EXCLUDED.review_count,
@@ -144,6 +173,14 @@ async function upsertRestaurant(row) {
     return rows[0];
   } catch (err) {
     if (err.code !== '23505') throw err;
+
+    const { rows: partnerRows } = await query(
+      `SELECT id FROM restaurants WHERE phone = $1 AND queue_enabled IS TRUE LIMIT 1`,
+      [row.phone]
+    );
+    if (partnerRows[0]) {
+      return touchQueuePartnerFromYelp(partnerRows[0].id, row);
+    }
 
     const { rows } = await query(
       `UPDATE restaurants SET
@@ -163,7 +200,7 @@ async function upsertRestaurant(row) {
         call_eligible = $14,
         timezone = $15,
         last_updated_at = $16
-       WHERE phone = $17
+       WHERE phone = $17 AND queue_enabled IS NOT TRUE
        RETURNING *`,
       [
         row.yelp_id,
@@ -176,7 +213,6 @@ async function upsertRestaurant(row) {
         row.state,
         row.zip_code,
         row.image,
-        row.rating,
         row.review_count,
         row.source,
         row.call_eligible,
