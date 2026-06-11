@@ -45,11 +45,19 @@ function timezoneForState(state) {
   return STATE_TIMEZONES[state.toUpperCase()] || 'America/New_York';
 }
 
-function primaryCuisine(categories = []) {
+function primaryCategory(categories = []) {
   const restaurantCategory = categories.find((c) => c.alias === 'restaurants');
-  const primary =
-    categories.find((c) => c.alias !== 'restaurants') || restaurantCategory || categories[0];
-  return primary?.title || 'Restaurant';
+  return (
+    categories.find((c) => c.alias !== 'restaurants') || restaurantCategory || categories[0]
+  );
+}
+
+function primaryCuisine(categories = []) {
+  return primaryCategory(categories)?.title || 'Restaurant';
+}
+
+function primaryCategoryAlias(categories = []) {
+  return primaryCategory(categories)?.alias || null;
 }
 
 function mapYelpBusiness(business, phoneOverride) {
@@ -83,7 +91,7 @@ function mapYelpBusiness(business, phoneOverride) {
 
   if (business.is_closed) return null;
   if (isChainName(row.name)) return null;
-  if ((business.categories || []).some((c) => isExcludedYelpCategory(c.alias))) return null;
+  if (isExcludedYelpCategory(primaryCategoryAlias(business.categories))) return null;
   if (!isCallEligibleRestaurant(row)) return null;
 
   return row;
