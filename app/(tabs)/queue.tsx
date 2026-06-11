@@ -208,7 +208,7 @@ export default function QueueScreen() {
       <View style={styles.header}>
         <View style={styles.headerText}>
           <Text style={styles.title}>Join a Queue</Text>
-          <Text style={styles.subtitle}>Skip the line — join remotely</Text>
+          <Text style={styles.subtitle}>Partner locations — join remotely</Text>
         </View>
         <View style={styles.headerActions}>
           <TouchableOpacity

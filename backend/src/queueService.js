@@ -69,14 +69,18 @@ function mapLocation(row) {
 }
 
 export async function getLocations({ includeAll = false } = {}) {
-  const whereClause = includeAll ? '' : 'WHERE r.is_queue_open IS NOT FALSE';
+  const conditions = ['r.queue_enabled IS TRUE'];
+  if (!includeAll) {
+    conditions.push('r.is_queue_open IS NOT FALSE');
+  }
+
   const { rows } = await query(
     `SELECT r.*,
       (SELECT COUNT(*)::int FROM queue_entries qe
        WHERE qe.restaurant_id = r.id AND qe.status IN ${ACTIVE_STATUS_SQL}
       ) AS queue_count
      FROM restaurants r
-     ${whereClause}
+     WHERE ${conditions.join(' AND ')}
      ORDER BY r.name`
   );
   return rows.map(mapLocation);
@@ -269,6 +273,7 @@ export async function joinQueue({ locationId, customerName, customerContact, par
   const { rows: locRows } = await query('SELECT * FROM restaurants WHERE id = $1', [locationId]);
   const location = locRows[0];
   if (!location) throw new Error('Location not found');
+  if (!location.queue_enabled) throw new Error('Queue is not available at this location');
   if (!location.is_queue_open) throw new Error('Queue is currently closed');
 
   if (!isValidPhone(customerContact)) {

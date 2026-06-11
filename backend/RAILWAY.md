@@ -81,6 +81,17 @@ The Home tab loads restaurants from **`GET /restaurants?sync=1`** (Yelp auto-dis
 
 Fast-food chains (Shake Shack, McDonald's, etc.) are filtered out automatically. Set `call_eligible = false` on a row to hide it manually.
 
+### Queue tab (separate from browse/search)
+
+The **Queue** tab only shows restaurants with `queue_enabled = true` (your manual partners). Yelp imports default to `queue_enabled = false`.
+
+Enable queue for a restaurant after onboarding:
+
+```sql
+UPDATE restaurants SET queue_enabled = true WHERE id = 2;
+-- or: WHERE LOWER(name) LIKE '%srirangam%';
+```
+
 ## 5. You can stop the local server
 
 No need for `npm run queue:backend` on your Mac anymore once Railway is working.
