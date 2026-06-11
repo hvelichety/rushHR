@@ -213,6 +213,7 @@ async function upsertRestaurant(row) {
         row.state,
         row.zip_code,
         row.image,
+        row.rating,
         row.review_count,
         row.source,
         row.call_eligible,
