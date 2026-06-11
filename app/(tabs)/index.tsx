@@ -108,7 +108,8 @@ export default function HomeScreen() {
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
-  const lastCitySyncRef = useRef<string>("");
+  const lastSearchFetchRef = useRef<string>("");
+  const [searchLoading, setSearchLoading] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const {
     updates: callUpdates,
@@ -645,22 +646,35 @@ useEffect(() => {
   }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
 
   useEffect(() => {
-    lastCitySyncRef.current = "";
+    lastSearchFetchRef.current = "";
   }, [query]);
 
-  // When searching a city with no local matches, discover restaurants there via Yelp
+  // Fetch from Yelp when user searches for a restaurant or city name
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 3 || filtered.length > 0) return;
+    if (q.length < 2) {
+      setSearchLoading(false);
+      return;
+    }
 
     const key = q.toLowerCase();
-    if (lastCitySyncRef.current === key) return;
+    if (lastSearchFetchRef.current === key) return;
 
     const timer = setTimeout(async () => {
-      lastCitySyncRef.current = key;
+      lastSearchFetchRef.current = key;
+      setSearchLoading(true);
       try {
-        const url = buildRestaurantsUrl(userLocation, false, { sync: true, location: q });
-        const res = await fetch(url);
+        const params = new URLSearchParams({
+          q,
+          fetch: "1",
+          sort: "popularity",
+        });
+        if (userLocation) {
+          params.set("lat", String(userLocation.latitude));
+          params.set("lng", String(userLocation.longitude));
+        }
+
+        const res = await fetch(`${RESTAURANT_API_BASE_URL}/restaurants?${params.toString()}`);
         if (!res.ok) return;
 
         const raw = await res.json();
@@ -684,12 +698,14 @@ useEffect(() => {
           return Array.from(byId.values());
         });
       } catch (err) {
-        console.warn("City restaurant discovery failed:", err);
+        console.warn("Search restaurant fetch failed:", err);
+      } finally {
+        setSearchLoading(false);
       }
-    }, 800);
+    }, 450);
 
     return () => clearTimeout(timer);
-  }, [query, filtered.length, userLocation, mapApiRestaurant]);
+  }, [query, userLocation, mapApiRestaurant]);
 
   const handleOpenAsk = (r: Restaurant) => {
     setSelectedRestaurant(r);
@@ -851,8 +867,8 @@ useEffect(() => {
         <Text style={styles.logo}>🍽️ RushHour</Text>
         <Text style={styles.subtitle}>
           {userLocation
-            ? "Popular spots near you — search Princeton or any city"
-            : "Popular restaurants you can call"}
+            ? "Popular spots near you — search any restaurant"
+            : "Search a restaurant name to call"}
         </Text>
 
         {/* Location Permission Banner */}
@@ -879,12 +895,15 @@ useEffect(() => {
 
         <View style={styles.searchWrapper}>
           <TextInput
-            placeholder="Search name, cuisine, or city"
+            placeholder="Search restaurant, cuisine, or city"
             placeholderTextColor="#94A3B8"
             value={query}
             onChangeText={setQuery}
             style={styles.search}
           />
+          {searchLoading && (
+            <ActivityIndicator size="small" color="#F45B5B" style={styles.searchSpinner} />
+          )}
         </View>
 
         {/* Debug info */}
@@ -1059,6 +1078,9 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
+  },
+  searchSpinner: {
+    marginRight: 12,
   },
   debug: {
     fontSize: 11,

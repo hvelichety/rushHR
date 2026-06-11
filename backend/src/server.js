@@ -105,7 +105,7 @@ app.post('/webhooks/vapi', async (req, res) => {
 
 app.get('/restaurants', async (req, res) => {
   try {
-    const { restaurants, discovery } = await listRestaurants({
+    const { restaurants, discovery, searchFetch } = await listRestaurants({
       lat: req.query.lat,
       lng: req.query.lng,
       radius: req.query.radius,
@@ -115,13 +115,20 @@ app.get('/restaurants', async (req, res) => {
       cuisine: req.query.cuisine,
       sort: req.query.sort,
       sync: req.query.sync,
+      fetch: req.query.fetch,
     });
 
     if (discovery?.imported != null && !discovery.skipped) {
       res.set('X-Restaurants-Imported', String(discovery.imported));
     }
+    if (searchFetch?.imported != null && !searchFetch.skipped) {
+      res.set('X-Restaurants-Search-Imported', String(searchFetch.imported));
+    }
     if (discovery?.error) {
       res.set('X-Restaurants-Sync-Error', discovery.error);
+    }
+    if (searchFetch?.error) {
+      res.set('X-Restaurants-Search-Error', searchFetch.error);
     }
 
     res.json(restaurants);

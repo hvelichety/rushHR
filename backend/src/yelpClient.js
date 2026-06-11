@@ -50,6 +50,7 @@ async function yelpFetch(path, searchParams = {}) {
  * Yelp max radius is 40,000 meters (~25 mi).
  */
 export async function searchRestaurants({
+  term,
   latitude,
   longitude,
   location,
@@ -65,14 +66,18 @@ export async function searchRestaurants({
     offset: Math.max(offset, 0),
   };
 
+  if (term?.trim()) {
+    params.term = term.trim();
+  }
+
   if (latitude != null && longitude != null) {
     params.latitude = latitude;
     params.longitude = longitude;
     params.radius = Math.min(Math.max(radiusMeters, 1000), 40000);
   } else if (location) {
     params.location = location;
-  } else {
-    throw new Error('latitude/longitude or location is required for Yelp search');
+  } else if (!term?.trim()) {
+    throw new Error('latitude/longitude, location, or search term is required for Yelp search');
   }
 
   return yelpFetch('/businesses/search', params);

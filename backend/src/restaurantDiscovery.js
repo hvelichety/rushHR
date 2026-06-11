@@ -241,6 +241,56 @@ async function importYelpPage(businesses) {
 }
 
 /**
+ * On-demand Yelp lookup when the user searches by restaurant or city name.
+ */
+export async function searchAndImportByTerm({ term, lat, lng, location } = {}) {
+  if (!isYelpConfigured()) {
+    return { skipped: true, reason: 'YELP_API_KEY not configured', imported: 0 };
+  }
+
+  const trimmed = typeof term === 'string' ? term.trim() : '';
+  if (trimmed.length < 2) {
+    return { skipped: true, reason: 'search too short', imported: 0 };
+  }
+
+  const latitude = lat != null ? Number(lat) : null;
+  const longitude = lng != null ? Number(lng) : null;
+  const locationText = typeof location === 'string' ? location.trim() : '';
+
+  let imported = 0;
+
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    const result = await searchRestaurants({
+      term: trimmed,
+      latitude,
+      longitude,
+      limit: 20,
+      sortBy: 'best_match',
+    });
+    imported += await importYelpPage(result.businesses || []);
+  } else if (locationText) {
+    const result = await searchRestaurants({
+      term: trimmed,
+      location: locationText,
+      limit: 20,
+      sortBy: 'best_match',
+    });
+    imported += await importYelpPage(result.businesses || []);
+  } else {
+    const result = await searchRestaurants({
+      term: trimmed,
+      location: trimmed,
+      limit: 20,
+      sortBy: 'best_match',
+    });
+    imported += await importYelpPage(result.businesses || []);
+  }
+
+  console.log(`✅ Yelp search "${trimmed}": imported ${imported} restaurants`);
+  return { skipped: false, imported, term: trimmed };
+}
+
+/**
  * Pull call-worthy restaurants from Yelp into Postgres.
  * Cached per ~0.1° grid or city string for YELP_SYNC_TTL_HOURS (default 24h).
  * When syncing by lat/lng, also syncs nearby town markets (Princeton, etc.).

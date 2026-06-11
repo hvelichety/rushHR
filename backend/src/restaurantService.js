@@ -1,6 +1,6 @@
 import { query } from './db.js';
 import { isCallEligibleRestaurant } from './restaurantCatalog.js';
-import { syncRestaurantsFromYelp } from './restaurantDiscovery.js';
+import { syncRestaurantsFromYelp, searchAndImportByTerm } from './restaurantDiscovery.js';
 import { compareByPopularity } from './restaurantPopularity.js';
 
 const EARTH_RADIUS_MILES = 3959;
@@ -120,6 +120,29 @@ function wantsSync(value) {
   return false;
 }
 
+function wantsFetch(value) {
+  return wantsSync(value);
+}
+
+async function maybeFetchSearchResults(options) {
+  if (!wantsFetch(options.fetch)) return null;
+
+  const q = typeof options.q === 'string' ? options.q.trim() : '';
+  if (q.length < 2) return null;
+
+  try {
+    return await searchAndImportByTerm({
+      term: q,
+      lat: options.lat,
+      lng: options.lng,
+      location: options.location,
+    });
+  } catch (err) {
+    console.error('Search fetch failed:', err.message);
+    return { error: err.message };
+  }
+}
+
 async function maybeDiscoverRestaurants(options) {
   if (!wantsSync(options.sync)) return null;
 
@@ -158,6 +181,7 @@ async function maybeDiscoverRestaurants(options) {
  * - lat/lng only affect distance_miles and sort order, not visibility.
  */
 export async function listRestaurants(options = {}) {
+  const searchFetch = await maybeFetchSearchResults(options);
   const discovery = await maybeDiscoverRestaurants(options);
 
   const userLat = parseCoord(options.lat);
@@ -208,7 +232,7 @@ export async function listRestaurants(options = {}) {
     );
   }
 
-  return { restaurants: mapped, discovery };
+  return { restaurants: mapped, discovery, searchFetch };
 }
 
 export async function getRestaurantById(id, { lat, lng } = {}) {
