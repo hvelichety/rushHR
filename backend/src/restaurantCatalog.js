@@ -129,6 +129,40 @@ const YELP_EXCLUDED_CATEGORIES = new Set([
   'nightlife',
 ]);
 
+/** Yelp aliases for full-service Indian / South Asian restaurants */
+const INDIAN_CATEGORY_ALIASES = new Set([
+  'indpak',
+  'indian',
+  'himalayan',
+  'pakistani',
+  'bangladeshi',
+  'srilankan',
+]);
+
+export function isIndianRestaurant(categories = [], name = '') {
+  const aliases = categories.map((c) => (c.alias || '').toLowerCase());
+  if (aliases.some((alias) => INDIAN_CATEGORY_ALIASES.has(alias))) return true;
+  return /\bindian\b|\bveg restaurant\b|\bsouth indian\b/i.test(name || '');
+}
+
+export function deriveCuisineFromYelp(categories = [], name = '') {
+  if (isIndianRestaurant(categories, name)) return 'Indian';
+
+  const restaurantCategory = categories.find((c) => c.alias === 'restaurants');
+  const primary =
+    categories.find((c) => c.alias !== 'restaurants') || restaurantCategory || categories[0];
+  return primary?.title || 'Restaurant';
+}
+
+export function shouldExcludeYelpBusiness(categories = [], name = '') {
+  if (isIndianRestaurant(categories, name)) return false;
+
+  const restaurantCategory = categories.find((c) => c.alias === 'restaurants');
+  const primary =
+    categories.find((c) => c.alias !== 'restaurants') || restaurantCategory || categories[0];
+  return isExcludedYelpCategory(primary?.alias);
+}
+
 export function isExcludedYelpCategory(alias) {
   if (!alias) return false;
   return YELP_EXCLUDED_CATEGORIES.has(alias.toLowerCase());

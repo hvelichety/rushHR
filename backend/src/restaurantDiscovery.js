@@ -1,9 +1,10 @@
 import { query } from './db.js';
 import {
+  deriveCuisineFromYelp,
   hasCallablePhone,
   isCallEligibleRestaurant,
   isChainName,
-  isExcludedYelpCategory,
+  shouldExcludeYelpBusiness,
 } from './restaurantCatalog.js';
 import { formatPhoneE164 } from './phone.js';
 import { getBusinessDetails, isYelpConfigured, searchRestaurants } from './yelpClient.js';
@@ -45,19 +46,8 @@ function timezoneForState(state) {
   return STATE_TIMEZONES[state.toUpperCase()] || 'America/New_York';
 }
 
-function primaryCategory(categories = []) {
-  const restaurantCategory = categories.find((c) => c.alias === 'restaurants');
-  return (
-    categories.find((c) => c.alias !== 'restaurants') || restaurantCategory || categories[0]
-  );
-}
-
-function primaryCuisine(categories = []) {
-  return primaryCategory(categories)?.title || 'Restaurant';
-}
-
-function primaryCategoryAlias(categories = []) {
-  return primaryCategory(categories)?.alias || null;
+function primaryCuisine(categories = [], name = '') {
+  return deriveCuisineFromYelp(categories, name);
 }
 
 function mapYelpBusiness(business, phoneOverride) {
@@ -71,7 +61,7 @@ function mapYelpBusiness(business, phoneOverride) {
     yelp_id: business.id,
     name: business.name,
     phone,
-    cuisine: primaryCuisine(business.categories),
+    cuisine: primaryCuisine(business.categories, business.name),
     latitude: coordinates.latitude ?? null,
     longitude: coordinates.longitude ?? null,
     address: addressParts.join(', ') || null,
@@ -91,7 +81,7 @@ function mapYelpBusiness(business, phoneOverride) {
 
   if (business.is_closed) return null;
   if (isChainName(row.name)) return null;
-  if (isExcludedYelpCategory(primaryCategoryAlias(business.categories))) return null;
+  if (shouldExcludeYelpBusiness(business.categories, business.name)) return null;
   if (!isCallEligibleRestaurant(row)) return null;
 
   return row;
