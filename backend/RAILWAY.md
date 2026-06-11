@@ -88,7 +88,9 @@ The **Queue** tab only shows restaurants with `queue_enabled = true` (your manua
 Enable queue for a restaurant after onboarding (by name, not hard-coded id):
 
 ```sql
-UPDATE restaurants SET queue_enabled = true WHERE LOWER(name) LIKE '%srirangam%';
+UPDATE restaurants SET queue_enabled = true WHERE id = 2;
+-- Test partner: phone +1 732-666-5066
+UPDATE restaurants SET queue_enabled = true WHERE LOWER(TRIM(name)) = 'test';
 ```
 
 Queue partners are protected from Yelp renames when two listings share the same phone.

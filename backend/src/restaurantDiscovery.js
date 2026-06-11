@@ -283,7 +283,7 @@ async function importYelpPage(businesses, { relaxed = false } = {}) {
 
 /** Import Yelp hits and return saved DB rows (for search). */
 export async function importYelpBusinesses(businesses, { relaxed = false } = {}) {
-  const saved = [];
+  const savedById = new Map();
 
   for (const business of businesses) {
     let phone = business.display_phone || business.phone;
@@ -295,10 +295,10 @@ export async function importYelpBusinesses(businesses, { relaxed = false } = {})
     if (!row) continue;
 
     const dbRow = await upsertRestaurant(row);
-    if (dbRow) saved.push(dbRow);
+    if (dbRow?.id != null) savedById.set(dbRow.id, dbRow);
   }
 
-  return saved;
+  return [...savedById.values()];
 }
 
 /**

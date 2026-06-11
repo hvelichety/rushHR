@@ -1,4 +1,5 @@
 import { isYelpConfigured, searchRestaurants } from './yelpClient.js';
+import { query } from './db.js';
 import { importYelpBusinesses } from './restaurantDiscovery.js';
 import { mapRestaurantRow } from './restaurantService.js';
 import { rankSearchResults } from './restaurantSearch.js';
@@ -33,6 +34,29 @@ function buildYelpSearchPasses(term, lat, lng) {
   passes.push({ term, location: 'New Jersey' });
 
   return passes;
+}
+
+function dedupeByRestaurantId(rows) {
+  const byId = new Map();
+  for (const row of rows) {
+    if (row?.id != null) byId.set(row.id, row);
+  }
+  return [...byId.values()];
+}
+
+/** Queue partners always appear in name search (e.g. Test) even when Yelp has other hits. */
+async function fetchQueuePartnersMatchingTerm(term) {
+  const trimmed = term.trim();
+  if (trimmed.length < 2) return [];
+
+  const { rows } = await query(
+    `SELECT r.*
+     FROM restaurants r
+     WHERE r.queue_enabled IS TRUE
+       AND LOWER(r.name) LIKE LOWER($1)`,
+    [`%${trimmed}%`]
+  );
+  return rows;
 }
 
 /**
@@ -71,11 +95,13 @@ export async function findRestaurantsBySearch({ q, lat, lng, limit = 40 } = {}) 
   }
 
   const yelpHits = seen.size;
-  const savedRows = await importYelpBusinesses([...seen.values()], { relaxed: true });
+  const savedRows = dedupeByRestaurantId(await importYelpBusinesses([...seen.values()], { relaxed: true }));
 
-  const mapped = savedRows.map((row) =>
-    mapRestaurantRow(row, { userLat, userLng })
-  );
+  const partnerRows = await fetchQueuePartnersMatchingTerm(term);
+  const mapped = dedupeByRestaurantId([
+    ...savedRows,
+    ...partnerRows,
+  ]).map((row) => mapRestaurantRow(row, { userLat, userLng }));
 
   const ranked = rankSearchResults(term, mapped).slice(0, limit);
 
