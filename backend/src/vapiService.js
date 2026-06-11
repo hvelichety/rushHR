@@ -330,7 +330,7 @@ function isVoicemailTranscript(text) {
 }
 
 const VOICEMAIL_USER_MESSAGE =
-  'The call went straight to voicemail — your phone may never have rung. Unknown out-of-state numbers (like +1 229) are often silenced. Turn off Settings → Phone → Silence Unknown Callers, or buy a local NJ number in Vapi.';
+  'Sorry, the call went to voicemail. Please try again later.';
 
 function resolveCallOutcome(vapiCall, question) {
   const transcript = pickTranscriptFromVapi(vapiCall);
