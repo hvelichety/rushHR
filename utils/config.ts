@@ -26,6 +26,9 @@ const QUEUE_API_URL = process.env.EXPO_PUBLIC_QUEUE_API_URL?.replace(/\/$/, '');
  */
 export const RESTAURANT_API_BASE_URL = QUEUE_API_URL || LEGACY_API_URL;
 
+/** Manual test partner on Queue + Call & Ask (732-666-5066) */
+export const TEST_RESTAURANT_ID = 1;
+
 /** @deprecated Use RESTAURANT_API_BASE_URL for restaurants; kept for legacy /call and /stream */
 export const API_BASE_URL = LEGACY_API_URL;
 export const API_KEY = process.env.EXPO_PUBLIC_API_KEY;

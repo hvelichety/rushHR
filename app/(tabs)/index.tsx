@@ -23,7 +23,7 @@ import RestaurantCard from "../../components/RestaurantCard";
 import UpdatesFeed from "../../components/UpdatesFeed";
 import { fetchRestaurant } from "../../utils/api";
 import { createRestaurantCall, fetchVoiceCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
-import { API_BASE_URL, NEARBY_RADIUS_MILES, RESTAURANT_API_BASE_URL } from "../../utils/config";
+import { API_BASE_URL, NEARBY_RADIUS_MILES, RESTAURANT_API_BASE_URL, TEST_RESTAURANT_ID } from "../../utils/config";
 import { mapApiRestaurant, searchRestaurantsLive } from "../../utils/restaurantSearchApi";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
@@ -103,6 +103,9 @@ export default function HomeScreen() {
   const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
   const [callStatus, setCallStatus] = useState<'calling' | 'completed' | 'failed'>('calling');
   const [answerSummary, setAnswerSummary] = useState<string | null>(null);
+  const [activeDestinationPhone, setActiveDestinationPhone] = useState<string | null>(null);
+  const [activeFromPhone, setActiveFromPhone] = useState<string | null>(null);
+  const [activeIsTestLine, setActiveIsTestLine] = useState(false);
   const [placingCall, setPlacingCall] = useState(false);
   const [activeCallRestaurantId, setActiveCallRestaurantId] = useState<number | null>(null);
 
@@ -708,6 +711,9 @@ useEffect(() => {
       setActiveQuestion(question);
       setCallStatus('calling');
       setAnswerSummary(null);
+      setActiveDestinationPhone(call.destinationPhone ?? r.phone ?? null);
+      setActiveFromPhone(call.fromPhoneNumber ?? null);
+      setActiveIsTestLine(r.id === TEST_RESTAURANT_ID);
       setRecommendations(
         restaurants
           .filter((x) => x.id !== r.id)
@@ -721,10 +727,13 @@ useEffect(() => {
 
       Toast.show({
         type: 'success',
-        text1: `Calling ${r.name}...`,
-        text2: call.fromPhoneNumber
-          ? `Add ${call.fromPhoneNumber} to Contacts if it doesn't ring`
-          : 'Our AI is asking your question',
+        text1: r.id === TEST_RESTAURANT_ID ? 'Calling your test number...' : `Calling ${r.name}...`,
+        text2:
+          r.id === TEST_RESTAURANT_ID
+            ? call.fromPhoneNumber
+              ? `Your phone should ring. Caller ID: ${call.fromPhoneNumber}`
+              : 'Your phone should ring — answer as the restaurant'
+            : 'Your phone won\'t ring. We\'ll show the answer here.',
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -985,6 +994,9 @@ useEffect(() => {
           question={activeQuestion}
           callStatus={callStatus}
           answerSummary={answerSummary}
+          destinationPhone={activeDestinationPhone}
+          fromPhoneNumber={activeFromPhone}
+          isTestLine={activeIsTestLine}
         />
         <Toast />
       </View>

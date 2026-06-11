@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { formatPhoneFromE164 } from "@/utils/phone";
 import { Restaurant } from "../utils/types";
 
 const { height } = Dimensions.get("window");
@@ -24,6 +25,9 @@ interface Props {
   question?: string | null;
   callStatus?: 'calling' | 'completed' | 'failed';
   answerSummary?: string | null;
+  destinationPhone?: string | null;
+  fromPhoneNumber?: string | null;
+  isTestLine?: boolean;
 }
 
 export default function RequestModal({
@@ -35,6 +39,9 @@ export default function RequestModal({
   question,
   callStatus = 'calling',
   answerSummary,
+  destinationPhone,
+  fromPhoneNumber,
+  isTestLine = false,
 }: Props) {
   const slideAnim = new Animated.Value(height);
 
@@ -55,6 +62,11 @@ export default function RequestModal({
   }, [visible]);
 
   if (!requested) return null;
+
+  const destinationLabel = destinationPhone
+    ? formatPhoneFromE164(destinationPhone)
+    : null;
+  const callerLabel = fromPhoneNumber ? formatPhoneFromE164(fromPhoneNumber) : null;
 
   return (
     <Modal visible={visible} transparent animationType="none">
@@ -91,7 +103,14 @@ export default function RequestModal({
             <View style={styles.callingRow}>
               <ActivityIndicator color="#F45B5B" />
               <Text style={styles.subtitle}>
-                Our AI is on the phone with {requested.name}. This usually takes 1-3 minutes.
+                {isTestLine
+                  ? destinationLabel
+                    ? `Calling your test number ${destinationLabel}. Your phone should ring — answer and talk to our AI as if you're the restaurant.`
+                    : 'Calling your test number. Your phone should ring.'
+                  : `Your phone won't ring. Our AI is calling ${requested.name}${destinationLabel ? ` at ${destinationLabel}` : ''} now. You'll see their answer here when the call finishes.`}
+                {isTestLine && callerLabel
+                  ? `\n\nIf it doesn't ring, turn off Settings → Phone → Silence Unknown Callers, or add ${callerLabel} to Contacts.`
+                  : ''}
               </Text>
             </View>
           ) : answerSummary ? (

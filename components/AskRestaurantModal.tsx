@@ -1,4 +1,6 @@
 import { Restaurant } from '@/utils/types';
+import { TEST_RESTAURANT_ID } from '@/utils/config';
+import { formatPhoneFromE164 } from '@/utils/phone';
 import { getSavedQueueProfile } from '@/utils/queueProfile';
 import {
   buildPickupQuestion,
@@ -164,10 +166,21 @@ export default function AskRestaurantModal({
             <View style={styles.handle} />
             <Text style={styles.title}>Ask {restaurant.name}</Text>
             <Text style={styles.subtitle}>
-              {mode === 'pickup'
-                ? 'We’ll call and place your pickup order — just fill in the details below.'
-                : 'Type what you want our AI to ask the restaurant on the phone.'}
+              {restaurant.id === TEST_RESTAURANT_ID
+                ? 'Test mode: we call your phone number, not a restaurant. Answer and respond as if you work there.'
+                : mode === 'pickup'
+                  ? 'We’ll call and place your pickup order — just fill in the details below.'
+                  : 'We call the restaurant for you. Your phone won’t ring — you’ll get their answer in the app.'}
             </Text>
+
+            {restaurant.id === TEST_RESTAURANT_ID && restaurant.phone ? (
+              <View style={styles.testBanner}>
+                <Text style={styles.testBannerText}>
+                  Calls go to {formatPhoneFromE164(restaurant.phone)}. If your phone doesn’t ring,
+                  turn off Silence Unknown Callers in Settings → Phone.
+                </Text>
+              </View>
+            ) : null}
 
             {mode === 'pickup' ? (
               <View style={styles.pickupForm}>
@@ -332,6 +345,19 @@ const styles = StyleSheet.create({
     color: '#64748B',
     lineHeight: 20,
     marginBottom: 14,
+  },
+  testBanner: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  testBannerText: {
+    fontSize: 14,
+    color: '#92400E',
+    lineHeight: 20,
   },
   input: {
     minHeight: 88,

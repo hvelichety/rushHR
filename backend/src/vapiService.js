@@ -3,8 +3,9 @@ import { formatPhoneE164 } from './phone.js';
 import { enqueueNotifications } from './notificationQueue.js';
 
 const VAPI_API_URL = 'https://api.vapi.ai/call';
-const VAPI_DIAL_CONFIRM_MS = 18_000;
+const VAPI_DIAL_CONFIRM_MS = 12_000;
 const VAPI_DIAL_POLL_MS = 1_500;
+const STALE_VOICE_CALL_MS = 8 * 60 * 1000;
 const MAX_QUESTION_LENGTH = 500;
 const MIN_QUESTION_LENGTH = 3;
 const UUID_RE =
@@ -161,7 +162,16 @@ export async function getVoiceCallsForDevice(deviceId, limit = 25) {
     [deviceId.trim(), limit]
   );
 
-  return rows.map((row) => {
+  const syncedRows = [];
+  for (const row of rows) {
+    if (row.status === 'dialing' || row.status === 'in_progress') {
+      syncedRows.push((await syncVoiceCallFromVapi(row)) ?? row);
+    } else {
+      syncedRows.push(row);
+    }
+  }
+
+  return syncedRows.map((row) => {
     const mapped = mapVoiceCall(row);
     const destinationPhone = formatPhoneE164(row.restaurant_phone);
     return destinationPhone ? { ...mapped, destinationPhone } : mapped;
@@ -449,6 +459,18 @@ async function syncVoiceCallFromVapi(callRecord) {
 
   try {
     const vapiCall = await fetchVapiCallRecord(callRecord.vapi_call_id);
+
+    if (callAgeMs > STALE_VOICE_CALL_MS) {
+      if (!vapiCall || !isVapiCallEnded(vapiCall)) {
+        return finalizeVoiceCallRecord(callRecord, {
+          transcript: vapiCall ? pickTranscriptFromVapi(vapiCall) : null,
+          failed: true,
+          answerSummary: 'Sorry, the call timed out. Please try again later.',
+          errorMessage: 'Call timed out',
+        });
+      }
+    }
+
     if (!vapiCall || !isVapiCallEnded(vapiCall)) return callRecord;
 
     const enrichedCall = await waitForVapiAnalysis(callRecord.vapi_call_id);
