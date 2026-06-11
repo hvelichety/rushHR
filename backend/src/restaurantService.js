@@ -2,26 +2,9 @@ import { query } from './db.js';
 import { isCallEligibleRestaurant } from './restaurantCatalog.js';
 import { syncRestaurantsFromYelp, searchAndImportByTerm } from './restaurantDiscovery.js';
 import { compareByPopularity } from './restaurantPopularity.js';
+import { matchesSearchQuery } from './restaurantSearch.js';
 
-const EARTH_RADIUS_MILES = 3959;
-
-function parseCoord(value) {
-  if (value === undefined || value === null || value === '') return null;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-}
-
-function haversineMiles(lat1, lng1, lat2, lng2) {
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return EARTH_RADIUS_MILES * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function mapRestaurantRow(row, { userLat, userLng } = {}) {
+export function mapRestaurantRow(row, { userLat, userLng } = {}) {
   let distanceMiles = null;
   if (
     userLat !== null &&
@@ -68,23 +51,32 @@ function mapRestaurantRow(row, { userLat, userLng } = {}) {
   };
 }
 
+const EARTH_RADIUS_MILES = 3959;
+
+function parseCoord(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function haversineMiles(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return EARTH_RADIUS_MILES * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function matchesSearch(row, q) {
-  if (!q) return true;
-  const needle = q.trim().toLowerCase();
-  if (!needle) return true;
-
-  const haystack = [
-    row.name,
-    row.cuisine,
-    row.city,
-    row.state,
-    row.address,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-
-  return haystack.includes(needle);
+  return matchesSearchQuery(q, {
+    name: row.name,
+    cuisine: row.cuisine,
+    city: row.city,
+    state: row.state,
+    address: row.address,
+  });
 }
 
 function sortRestaurants(rows, { userLat, userLng, sort }) {

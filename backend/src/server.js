@@ -28,6 +28,7 @@ import {
 import { createVoiceCall, getVoiceCall, getVoiceCallsForDevice, handleVapiWebhook } from './vapiService.js';
 import { getRestaurantById, listRestaurants } from './restaurantService.js';
 import { syncRestaurantsFromYelp } from './restaurantDiscovery.js';
+import { findRestaurantsBySearch } from './restaurantSearchService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -99,6 +100,25 @@ app.post('/webhooks/vapi', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error('Vapi webhook error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/restaurants/search', async (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    if (q.trim().length < 2) {
+      return res.status(400).json({ error: 'q must be at least 2 characters' });
+    }
+
+    const payload = await findRestaurantsBySearch({
+      q,
+      lat: req.query.lat,
+      lng: req.query.lng,
+    });
+
+    res.json(payload);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

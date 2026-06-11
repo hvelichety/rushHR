@@ -50,7 +50,7 @@ function primaryCuisine(categories = [], name = '') {
   return deriveCuisineFromYelp(categories, name);
 }
 
-function mapYelpBusiness(business, phoneOverride) {
+function mapYelpBusiness(business, phoneOverride, { relaxed = false } = {}) {
   const phone = formatPhoneE164(phoneOverride || business.display_phone || business.phone);
   if (!phone) return null;
 
@@ -81,7 +81,7 @@ function mapYelpBusiness(business, phoneOverride) {
 
   if (business.is_closed) return null;
   if (isChainName(row.name)) return null;
-  if (shouldExcludeYelpBusiness(business.categories, business.name)) return null;
+  if (!relaxed && shouldExcludeYelpBusiness(business.categories, business.name)) return null;
   if (!isCallEligibleRestaurant(row)) return null;
 
   return row;
@@ -111,7 +111,7 @@ async function upsertRestaurant(row) {
   ];
 
   try {
-    await query(
+    const { rows } = await query(
       `INSERT INTO restaurants (
         yelp_id, name, phone, cuisine, latitude, longitude,
         address, city, state, zip_code, image, rating, review_count, source,
@@ -137,13 +137,15 @@ async function upsertRestaurant(row) {
         source = EXCLUDED.source,
         call_eligible = EXCLUDED.call_eligible,
         timezone = EXCLUDED.timezone,
-        last_updated_at = EXCLUDED.last_updated_at`,
+        last_updated_at = EXCLUDED.last_updated_at
+      RETURNING *`,
       values
     );
+    return rows[0];
   } catch (err) {
     if (err.code !== '23505') throw err;
 
-    await query(
+    const { rows } = await query(
       `UPDATE restaurants SET
         yelp_id = COALESCE(yelp_id, $1),
         name = $2,
@@ -161,7 +163,8 @@ async function upsertRestaurant(row) {
         call_eligible = $14,
         timezone = $15,
         last_updated_at = $16
-       WHERE phone = $17`,
+       WHERE phone = $17
+       RETURNING *`,
       [
         row.yelp_id,
         row.name,
@@ -182,6 +185,7 @@ async function upsertRestaurant(row) {
         row.phone,
       ]
     );
+    return rows[0];
   }
 }
 
@@ -221,7 +225,7 @@ async function enrichPhoneIfMissing(business) {
   }
 }
 
-async function importYelpPage(businesses) {
+async function importYelpPage(businesses, { relaxed = false } = {}) {
   let imported = 0;
 
   for (const business of businesses) {
@@ -230,7 +234,7 @@ async function importYelpPage(businesses) {
       phone = await enrichPhoneIfMissing(business);
     }
 
-    const row = mapYelpBusiness(business, phone);
+    const row = mapYelpBusiness(business, phone, { relaxed });
     if (!row) continue;
 
     await upsertRestaurant(row);
@@ -238,6 +242,26 @@ async function importYelpPage(businesses) {
   }
 
   return imported;
+}
+
+/** Import Yelp hits and return saved DB rows (for search). */
+export async function importYelpBusinesses(businesses, { relaxed = false } = {}) {
+  const saved = [];
+
+  for (const business of businesses) {
+    let phone = business.display_phone || business.phone;
+    if (!hasCallablePhone(phone)) {
+      phone = await enrichPhoneIfMissing(business);
+    }
+
+    const row = mapYelpBusiness(business, phone, { relaxed });
+    if (!row) continue;
+
+    const dbRow = await upsertRestaurant(row);
+    if (dbRow) saved.push(dbRow);
+  }
+
+  return saved;
 }
 
 /**

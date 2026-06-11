@@ -24,6 +24,7 @@ import UpdatesFeed from "../../components/UpdatesFeed";
 import { fetchRestaurant } from "../../utils/api";
 import { createRestaurantCall, fetchVoiceCall, getVoiceApiConfigError, pollVoiceCallUntilDone } from "../../utils/voiceApi";
 import { API_BASE_URL, NEARBY_RADIUS_MILES, RESTAURANT_API_BASE_URL } from "../../utils/config";
+import { mapApiRestaurant, searchRestaurantsLive } from "../../utils/restaurantSearchApi";
 import { minutesSince } from "../../utils/time";
 import { Restaurant } from "../../utils/types";
 const EventSource = EventSourcePolyfill;
@@ -108,8 +109,9 @@ export default function HomeScreen() {
   // const [now, setNow] = useState(Date.now()); // COOLDOWN DISABLED (today)
   const deviceIdRef = useRef<string | null>(null);
   const pushTokenRef = useRef<string | null>(null);
-  const lastSearchFetchRef = useRef<string>("");
+  const searchRequestRef = useRef(0);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<Restaurant[]>([]);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const {
     updates: callUpdates,
@@ -120,31 +122,7 @@ export default function HomeScreen() {
   } = useCallUpdates(deviceId);
   // Cooldown disabled: every tap triggers a call request
 
-  const mapApiRestaurant = useCallback((r: Record<string, unknown>): Restaurant => ({
-    id: r.id as number,
-    name: (r.name as string) || 'Restaurant',
-    cuisine: (r.cuisine as string) || 'Unknown',
-    phone: r.phone as string,
-    waitMinutes: r.wait_minutes as number | undefined,
-    lastUpdatedAt: r.last_updated_at
-      ? (r.last_updated_at as number) < 1e12
-        ? (r.last_updated_at as number) * 1000
-        : (r.last_updated_at as number)
-      : undefined,
-    image: (r.image as string) || 'https://via.placeholder.com/150',
-    timezone: r.timezone as string | undefined,
-    openHour: r.open_hour as number | undefined,
-    closeHour: r.close_hour as number | undefined,
-    lastCalledAt: r.last_called_at as number | undefined,
-    latitude: r.latitude as number | undefined,
-    longitude: r.longitude as number | undefined,
-    address: r.address as string | undefined,
-    city: r.city as string | undefined,
-    state: r.state as string | undefined,
-    rating: r.rating as number | undefined,
-    review_count: r.review_count as number | undefined,
-    distance_miles: r.distance_miles as number | undefined,
-  }), []);
+  const isSearching = query.trim().length >= 2;
 
   const openVoiceCallResult = useCallback(async (callId: number) => {
     try {
@@ -187,7 +165,7 @@ export default function HomeScreen() {
       const message = err instanceof Error ? err.message : 'Could not load your update';
       Toast.show({ type: 'error', text1: 'Update unavailable', text2: message });
     }
-  }, [restaurants, mapApiRestaurant, markRead, upsertCall]);
+  }, [restaurants, markRead, upsertCall]);
 
   const openUpdateDetail = useCallback(
     (update: CallUpdate) => {
@@ -593,10 +571,9 @@ useEffect(() => {
     return ["All", ...Array.from(cuisines).sort()];
   }, [restaurants]);
 
-  // Search, cuisine, nearby filter — list stays global; distance only sorts / optional radius filter
-  const filtered = useMemo(() => {
+  // Browse list (popular nearby) — no text search filter here
+  const browseList = useMemo(() => {
     let result = restaurants;
-    const q = query.trim().toLowerCase();
 
     if (selectedCuisine !== "All") {
       result = result.filter((r) => r.cuisine === selectedCuisine);
@@ -608,16 +585,6 @@ useEffect(() => {
           r.distance_miles !== undefined &&
           r.distance_miles !== null &&
           r.distance_miles <= NEARBY_RADIUS_MILES
-      );
-    }
-
-    if (q) {
-      result = result.filter(
-        (r) =>
-          r.name.toLowerCase().includes(q) ||
-          (r.cuisine && r.cuisine.toLowerCase().includes(q)) ||
-          (r.city && r.city.toLowerCase().includes(q)) ||
-          (r.state && r.state.toLowerCase().includes(q))
       );
     }
 
@@ -643,53 +610,45 @@ useEffect(() => {
     }
 
     return result;
-  }, [query, restaurants, selectedCuisine, showNearbyOnly, userLocation]);
+  }, [restaurants, selectedCuisine, showNearbyOnly, userLocation]);
 
-  useEffect(() => {
-    lastSearchFetchRef.current = "";
-  }, [query]);
+  // Search mode uses dedicated Yelp results; browse mode uses popular list
+  const displayList = useMemo(() => {
+    let result = isSearching ? searchResults : browseList;
 
-  // Fetch from Yelp when user searches for a restaurant or city name
+    if (isSearching && selectedCuisine !== "All") {
+      result = result.filter((r) => r.cuisine === selectedCuisine);
+    }
+
+    if (isSearching && showNearbyOnly && userLocation) {
+      result = result.filter(
+        (r) =>
+          r.distance_miles !== undefined &&
+          r.distance_miles !== null &&
+          r.distance_miles <= NEARBY_RADIUS_MILES
+      );
+    }
+
+    return result;
+  }, [isSearching, searchResults, browseList, selectedCuisine, showNearbyOnly, userLocation]);
+
+  // Live Yelp search when typing a restaurant name
   useEffect(() => {
     const q = query.trim();
     if (q.length < 2) {
+      setSearchResults([]);
       setSearchLoading(false);
       return;
     }
 
-    const key = q.toLowerCase();
-    if (lastSearchFetchRef.current === key) return;
-
+    const requestId = ++searchRequestRef.current;
     const timer = setTimeout(async () => {
-      lastSearchFetchRef.current = key;
       setSearchLoading(true);
       try {
-        const params = new URLSearchParams({
-          q,
-          fetch: "1",
-          sort: "popularity",
-        });
-        if (userLocation) {
-          params.set("lat", String(userLocation.latitude));
-          params.set("lng", String(userLocation.longitude));
-        }
+        const incoming = await searchRestaurantsLive(q, userLocation);
+        if (searchRequestRef.current !== requestId) return;
 
-        const res = await fetch(`${RESTAURANT_API_BASE_URL}/restaurants?${params.toString()}`);
-        if (!res.ok) return;
-
-        const raw = await res.json();
-        const restaurantArray = Array.isArray(raw)
-          ? raw
-          : Array.isArray(raw?.data)
-            ? raw.data
-            : [];
-
-        if (restaurantArray.length === 0) return;
-
-        const incoming: Restaurant[] = restaurantArray.map((r: Record<string, unknown>) =>
-          mapApiRestaurant(r)
-        );
-
+        setSearchResults(incoming);
         setRestaurants((prev) => {
           const byId = new Map(prev.map((r) => [r.id, r]));
           for (const r of incoming) {
@@ -698,14 +657,18 @@ useEffect(() => {
           return Array.from(byId.values());
         });
       } catch (err) {
-        console.warn("Search restaurant fetch failed:", err);
+        if (searchRequestRef.current !== requestId) return;
+        console.warn("Restaurant search failed:", err);
+        setSearchResults([]);
       } finally {
-        setSearchLoading(false);
+        if (searchRequestRef.current === requestId) {
+          setSearchLoading(false);
+        }
       }
-    }, 450);
+    }, 350);
 
     return () => clearTimeout(timer);
-  }, [query, userLocation, mapApiRestaurant]);
+  }, [query, userLocation]);
 
   const handleOpenAsk = (r: Restaurant) => {
     setSelectedRestaurant(r);
@@ -909,7 +872,7 @@ useEffect(() => {
         {/* Debug info */}
         {__DEV__ && (
           <Text style={styles.debug}>
-            Restaurants: {restaurants.length} | Filtered: {filtered.length} | Location: {userLocation ? '✅' : '❌'}
+            Restaurants: {restaurants.length} | Showing: {displayList.length} | {isSearching ? 'Search' : 'Browse'} | Location: {userLocation ? '✅' : '❌'}
           </Text>
         )}
 
@@ -934,7 +897,7 @@ useEffect(() => {
         })()}
 
         <FlatList
-          data={loading ? [] : filtered}
+          data={loading && !isSearching ? [] : displayList}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderItem}
           ListHeaderComponent={
@@ -947,30 +910,39 @@ useEffect(() => {
             </View>
           }
           contentContainerStyle={
-            filtered.length === 0 && !loading
+            displayList.length === 0 && !loading
               ? { flexGrow: 1, paddingBottom: 32 }
               : { paddingBottom: 32 }
           }
           ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
           ListEmptyComponent={
-            loading ? (
+            loading && !isSearching ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#F45B5B" />
                 <Text style={styles.loadingText}>Loading restaurants...</Text>
               </View>
+            ) : searchLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#F45B5B" />
+                <Text style={styles.loadingText}>Searching for "{query.trim()}"...</Text>
+              </View>
             ) : (
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>
-                  {query || selectedCuisine !== "All" || showNearbyOnly
-                    ? "No restaurants found"
-                    : locationPermissionDenied
-                      ? "Enable location to see nearby restaurants"
-                      : "No restaurants available"}
+                  {isSearching
+                    ? `No restaurants found for "${query.trim()}"`
+                    : query || selectedCuisine !== "All" || showNearbyOnly
+                      ? "No restaurants found"
+                      : locationPermissionDenied
+                        ? "Enable location to see nearby restaurants"
+                        : "No restaurants available"}
                 </Text>
                 <Text style={styles.emptySubtext}>
-                  {query || selectedCuisine !== "All" || showNearbyOnly
-                    ? "Try a different search or filter"
-                    : "Pull down to refresh"}
+                  {isSearching
+                    ? "Try the full name or add the city"
+                    : query || selectedCuisine !== "All" || showNearbyOnly
+                      ? "Try a different search or filter"
+                      : "Pull down to refresh"}
                 </Text>
               </View>
             )
