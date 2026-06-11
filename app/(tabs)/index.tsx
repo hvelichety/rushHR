@@ -46,6 +46,7 @@ function buildRestaurantsUrl(
   if (options?.sync !== false) {
     params.set("sync", "1");
   }
+  params.set("sort", "popularity");
 
   if (options?.location?.trim()) {
     params.set("location", options.location.trim());
@@ -140,6 +141,7 @@ export default function HomeScreen() {
     city: r.city as string | undefined,
     state: r.state as string | undefined,
     rating: r.rating as number | undefined,
+    review_count: r.review_count as number | undefined,
     distance_miles: r.distance_miles as number | undefined,
   }), []);
 
@@ -298,6 +300,7 @@ export default function HomeScreen() {
           city: r.city,
           state: r.state,
           rating: r.rating,
+          review_count: r.review_count,
           distance_miles: r.distance_miles,
         }));
 
@@ -401,6 +404,7 @@ export default function HomeScreen() {
           city: r.city,
           state: r.state,
           rating: r.rating,
+          review_count: r.review_count,
           distance_miles: r.distance_miles,
         }));
 
@@ -538,6 +542,7 @@ useEffect(() => {
         city: r.city,
         state: r.state,
         rating: r.rating,
+        review_count: r.review_count,
         distance_miles: r.distance_miles,
       }));
 
@@ -617,12 +622,22 @@ useEffect(() => {
 
     if (userLocation && !showNearbyOnly) {
       result = [...result].sort((a, b) => {
-        const da = a.distance_miles;
-        const db = b.distance_miles;
-        if (da == null && db == null) return a.name.localeCompare(b.name);
-        if (da == null) return 1;
-        if (db == null) return -1;
+        const reviewsA = a.review_count ?? 0;
+        const reviewsB = b.review_count ?? 0;
+        if (reviewsB !== reviewsA) return reviewsB - reviewsA;
+        const ratingA = a.rating ?? 0;
+        const ratingB = b.rating ?? 0;
+        if (ratingB !== ratingA) return ratingB - ratingA;
+        const da = a.distance_miles ?? Number.POSITIVE_INFINITY;
+        const db = b.distance_miles ?? Number.POSITIVE_INFINITY;
         return da - db;
+      });
+    } else if (!userLocation) {
+      result = [...result].sort((a, b) => {
+        const reviewsA = a.review_count ?? 0;
+        const reviewsB = b.review_count ?? 0;
+        if (reviewsB !== reviewsA) return reviewsB - reviewsA;
+        return (b.rating ?? 0) - (a.rating ?? 0);
       });
     }
 
@@ -836,8 +851,8 @@ useEffect(() => {
         <Text style={styles.logo}>🍽️ RushHour</Text>
         <Text style={styles.subtitle}>
           {userLocation
-            ? "Call-worthy spots near you — search any city when you're on the road"
-            : "Restaurants you can call — enable location to sort by distance"}
+            ? "Popular spots near you — search Princeton or any city"
+            : "Popular restaurants you can call"}
         </Text>
 
         {/* Location Permission Banner */}

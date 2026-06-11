@@ -151,6 +151,7 @@ export async function fetchAllRestaurants(
       city: r.city,
       state: r.state,
       rating: r.rating,
+      review_count: r.review_count,
       distance_miles: r.distance_miles,
     }));
 

@@ -12,6 +12,10 @@ const SYNC_TTL_MS =
   (Number(process.env.YELP_SYNC_TTL_HOURS) || 24) * 60 * 60 * 1000;
 const MAX_RESULTS_PER_SYNC = Number(process.env.YELP_SYNC_MAX_RESULTS) || 200;
 const DEFAULT_RADIUS_METERS = Number(process.env.YELP_SYNC_RADIUS_METERS) || 40000;
+const EXTRA_SYNC_LOCATIONS = (process.env.YELP_SYNC_EXTRA_LOCATIONS || 'Princeton, NJ,New Brunswick, NJ')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const STATE_TIMEZONES = {
   NJ: 'America/New_York',
@@ -68,6 +72,7 @@ function mapYelpBusiness(business, phoneOverride) {
     zip_code: location.zip_code || null,
     image: business.image_url || null,
     rating: business.rating ?? null,
+    review_count: business.review_count ?? null,
     source: 'yelp',
     call_eligible: true,
     timezone: timezoneForState(location.state),
@@ -85,53 +90,101 @@ function mapYelpBusiness(business, phoneOverride) {
 }
 
 async function upsertRestaurant(row) {
-  await query(
-    `INSERT INTO restaurants (
-      yelp_id, name, phone, cuisine, latitude, longitude,
-      address, city, state, zip_code, image, rating, source,
-      call_eligible, timezone, open_hour, close_hour, last_updated_at
-    ) VALUES (
-      $1, $2, $3, $4, $5, $6,
-      $7, $8, $9, $10, $11, $12, $13,
-      $14, $15, $16, $17, $18
-    )
-    ON CONFLICT (yelp_id) DO UPDATE SET
-      name = EXCLUDED.name,
-      phone = EXCLUDED.phone,
-      cuisine = EXCLUDED.cuisine,
-      latitude = EXCLUDED.latitude,
-      longitude = EXCLUDED.longitude,
-      address = EXCLUDED.address,
-      city = EXCLUDED.city,
-      state = EXCLUDED.state,
-      zip_code = EXCLUDED.zip_code,
-      image = COALESCE(EXCLUDED.image, restaurants.image),
-      rating = EXCLUDED.rating,
-      source = EXCLUDED.source,
-      call_eligible = EXCLUDED.call_eligible,
-      timezone = EXCLUDED.timezone,
-      last_updated_at = EXCLUDED.last_updated_at`,
-    [
-      row.yelp_id,
-      row.name,
-      row.phone,
-      row.cuisine,
-      row.latitude,
-      row.longitude,
-      row.address,
-      row.city,
-      row.state,
-      row.zip_code,
-      row.image,
-      row.rating,
-      row.source,
-      row.call_eligible,
-      row.timezone,
-      row.open_hour,
-      row.close_hour,
-      row.last_updated_at,
-    ]
-  );
+  const values = [
+    row.yelp_id,
+    row.name,
+    row.phone,
+    row.cuisine,
+    row.latitude,
+    row.longitude,
+    row.address,
+    row.city,
+    row.state,
+    row.zip_code,
+    row.image,
+    row.rating,
+    row.review_count,
+    row.source,
+    row.call_eligible,
+    row.timezone,
+    row.open_hour,
+    row.close_hour,
+    row.last_updated_at,
+  ];
+
+  try {
+    await query(
+      `INSERT INTO restaurants (
+        yelp_id, name, phone, cuisine, latitude, longitude,
+        address, city, state, zip_code, image, rating, review_count, source,
+        call_eligible, timezone, open_hour, close_hour, last_updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12, $13, $14,
+        $15, $16, $17, $18, $19
+      )
+      ON CONFLICT (yelp_id) DO UPDATE SET
+        name = EXCLUDED.name,
+        phone = EXCLUDED.phone,
+        cuisine = EXCLUDED.cuisine,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        address = EXCLUDED.address,
+        city = EXCLUDED.city,
+        state = EXCLUDED.state,
+        zip_code = EXCLUDED.zip_code,
+        image = COALESCE(EXCLUDED.image, restaurants.image),
+        rating = EXCLUDED.rating,
+        review_count = EXCLUDED.review_count,
+        source = EXCLUDED.source,
+        call_eligible = EXCLUDED.call_eligible,
+        timezone = EXCLUDED.timezone,
+        last_updated_at = EXCLUDED.last_updated_at`,
+      values
+    );
+  } catch (err) {
+    if (err.code !== '23505') throw err;
+
+    await query(
+      `UPDATE restaurants SET
+        yelp_id = COALESCE(yelp_id, $1),
+        name = $2,
+        cuisine = $3,
+        latitude = $4,
+        longitude = $5,
+        address = $6,
+        city = $7,
+        state = $8,
+        zip_code = $9,
+        image = COALESCE($10, image),
+        rating = $11,
+        review_count = $12,
+        source = $13,
+        call_eligible = $14,
+        timezone = $15,
+        last_updated_at = $16
+       WHERE phone = $17`,
+      [
+        row.yelp_id,
+        row.name,
+        row.cuisine,
+        row.latitude,
+        row.longitude,
+        row.address,
+        row.city,
+        row.state,
+        row.zip_code,
+        row.image,
+        row.rating,
+        row.review_count,
+        row.source,
+        row.call_eligible,
+        row.timezone,
+        row.last_updated_at,
+        row.phone,
+      ]
+    );
+  }
 }
 
 async function shouldSyncRegion(regionKey, force) {
@@ -192,6 +245,7 @@ async function importYelpPage(businesses) {
 /**
  * Pull call-worthy restaurants from Yelp into Postgres.
  * Cached per ~0.1° grid or city string for YELP_SYNC_TTL_HOURS (default 24h).
+ * When syncing by lat/lng, also syncs nearby town markets (Princeton, etc.).
  */
 export async function syncRestaurantsFromYelp({
   lat,
@@ -199,6 +253,7 @@ export async function syncRestaurantsFromYelp({
   location,
   force = false,
   radiusMeters = DEFAULT_RADIUS_METERS,
+  includeExtraMarkets = false,
 } = {}) {
   if (!isYelpConfigured()) {
     return { skipped: true, reason: 'YELP_API_KEY not configured', imported: 0 };
@@ -218,34 +273,67 @@ export async function syncRestaurantsFromYelp({
   }
 
   if (!(await shouldSyncRegion(regionKey, force))) {
-    return { skipped: true, reason: 'recently synced', imported: 0, regionKey };
+    if (!includeExtraMarkets || !EXTRA_SYNC_LOCATIONS.length) {
+      return { skipped: true, reason: 'recently synced', imported: 0, regionKey };
+    }
+  } else {
+    let totalImported = 0;
+    let offset = 0;
+
+    while (offset < MAX_RESULTS_PER_SYNC) {
+      const limit = Math.min(50, MAX_RESULTS_PER_SYNC - offset);
+      const result = await searchRestaurants({
+        latitude: Number.isFinite(latitude) ? latitude : undefined,
+        longitude: Number.isFinite(longitude) ? longitude : undefined,
+        location: Number.isFinite(latitude) ? undefined : locationText,
+        radiusMeters,
+        limit,
+        offset,
+        sortBy: 'review_count',
+      });
+
+      const businesses = result.businesses || [];
+      if (businesses.length === 0) break;
+
+      totalImported += await importYelpPage(businesses);
+      offset += businesses.length;
+
+      if (businesses.length < limit) break;
+    }
+
+    await markRegionSynced(regionKey, totalImported);
+    console.log(`✅ Yelp sync ${regionKey}: imported ${totalImported} restaurants`);
+
+    if (includeExtraMarkets && EXTRA_SYNC_LOCATIONS.length) {
+      for (const market of EXTRA_SYNC_LOCATIONS) {
+        const sub = await syncRestaurantsFromYelp({
+          location: market,
+          force,
+          radiusMeters,
+          includeExtraMarkets: false,
+        });
+        totalImported += sub.imported || 0;
+      }
+    }
+
+    return { skipped: false, imported: totalImported, regionKey };
   }
 
-  let totalImported = 0;
-  let offset = 0;
-
-  while (offset < MAX_RESULTS_PER_SYNC) {
-    const limit = Math.min(50, MAX_RESULTS_PER_SYNC - offset);
-    const result = await searchRestaurants({
-      latitude: Number.isFinite(latitude) ? latitude : undefined,
-      longitude: Number.isFinite(longitude) ? longitude : undefined,
-      location: Number.isFinite(latitude) ? undefined : locationText,
+  let extraImported = 0;
+  for (const market of EXTRA_SYNC_LOCATIONS) {
+    const sub = await syncRestaurantsFromYelp({
+      location: market,
+      force,
       radiusMeters,
-      limit,
-      offset,
+      includeExtraMarkets: false,
     });
-
-    const businesses = result.businesses || [];
-    if (businesses.length === 0) break;
-
-    totalImported += await importYelpPage(businesses);
-    offset += businesses.length;
-
-    if (businesses.length < limit) break;
+    extraImported += sub.imported || 0;
   }
 
-  await markRegionSynced(regionKey, totalImported);
-  console.log(`✅ Yelp sync ${regionKey}: imported ${totalImported} restaurants`);
-
-  return { skipped: false, imported: totalImported, regionKey };
+  return {
+    skipped: extraImported === 0,
+    reason: extraImported === 0 ? 'recently synced' : undefined,
+    imported: extraImported,
+    regionKey,
+  };
 }

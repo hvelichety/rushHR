@@ -117,7 +117,7 @@ export default function FilterModal({
                     {!tempNearby && <View style={styles.radioDot} />}
                   </View>
                   <Text style={styles.radioLabel}>All restaurants</Text>
-                  <Text style={styles.radioHint}> (any city — sorted by distance)</Text>
+                  <Text style={styles.radioHint}> (any city — popular first)</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity

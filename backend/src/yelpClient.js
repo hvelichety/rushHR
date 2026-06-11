@@ -56,10 +56,11 @@ export async function searchRestaurants({
   radiusMeters = 40000,
   limit = 50,
   offset = 0,
+  sortBy = 'review_count',
 }) {
   const params = {
     categories: 'restaurants',
-    sort_by: 'distance',
+    sort_by: sortBy,
     limit: Math.min(Math.max(limit, 1), 50),
     offset: Math.max(offset, 0),
   };

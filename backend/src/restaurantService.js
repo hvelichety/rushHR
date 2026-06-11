@@ -1,6 +1,7 @@
 import { query } from './db.js';
 import { isCallEligibleRestaurant } from './restaurantCatalog.js';
 import { syncRestaurantsFromYelp } from './restaurantDiscovery.js';
+import { compareByPopularity } from './restaurantPopularity.js';
 
 const EARTH_RADIUS_MILES = 3959;
 
@@ -61,6 +62,7 @@ function mapRestaurantRow(row, { userLat, userLng } = {}) {
     city: row.city || null,
     state: row.state || null,
     rating: row.rating != null ? Number(row.rating) : null,
+    review_count: row.review_count != null ? Number(row.review_count) : null,
     distance_miles: distanceMiles,
     call_eligible: row.call_eligible !== false,
   };
@@ -93,7 +95,7 @@ function sortRestaurants(rows, { userLat, userLng, sort }) {
 
   if (sort === 'name') {
     withDistance.sort((a, b) => a.mapped.name.localeCompare(b.mapped.name));
-  } else if (userLat !== null && userLng !== null) {
+  } else if (sort === 'distance' && userLat !== null && userLng !== null) {
     withDistance.sort((a, b) => {
       const da = a.mapped.distance_miles;
       const db = b.mapped.distance_miles;
@@ -103,7 +105,7 @@ function sortRestaurants(rows, { userLat, userLng, sort }) {
       return da - db;
     });
   } else {
-    withDistance.sort((a, b) => a.mapped.name.localeCompare(b.mapped.name));
+    withDistance.sort((a, b) => compareByPopularity(a.mapped, b.mapped));
   }
 
   return withDistance.map(({ mapped }) => mapped);
@@ -131,11 +133,18 @@ async function maybeDiscoverRestaurants(options) {
     '';
 
   try {
+    const hasCoords =
+      options.lat != null &&
+      options.lng != null &&
+      Number.isFinite(Number(options.lat)) &&
+      Number.isFinite(Number(options.lng));
+
     return await syncRestaurantsFromYelp({
       lat: options.lat,
       lng: options.lng,
       location: location || undefined,
       force,
+      includeExtraMarkets: hasCoords && !location,
     });
   } catch (err) {
     console.error('Restaurant discovery failed:', err.message);
@@ -157,7 +166,12 @@ export async function listRestaurants(options = {}) {
   const q = typeof options.q === 'string' ? options.q : '';
   const city = typeof options.city === 'string' ? options.city.trim() : '';
   const cuisine = typeof options.cuisine === 'string' ? options.cuisine.trim() : '';
-  const sort = options.sort === 'name' ? 'name' : 'distance';
+  const sort =
+    options.sort === 'name'
+      ? 'name'
+      : options.sort === 'distance'
+        ? 'distance'
+        : 'popularity';
 
   const conditions = ['r.phone IS NOT NULL', "TRIM(r.phone) <> ''"];
   const params = [];

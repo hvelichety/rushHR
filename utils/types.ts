@@ -18,5 +18,6 @@ export type Restaurant = {
   city?: string;
   state?: string;
   rating?: number;
+  review_count?: number;
   distance_miles?: number; // Calculated by backend
 };
