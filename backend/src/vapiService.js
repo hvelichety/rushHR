@@ -73,6 +73,41 @@ function getVapiConfig() {
   return { apiKey, assistantId, phoneNumberId, fromPhoneNumber: fromPhoneNumber || null };
 }
 
+let cachedAssistantModel = null;
+
+/** Vapi requires provider + model when overriding model.messages — load from the saved assistant. */
+async function getAssistantModelConfig(assistantId) {
+  if (cachedAssistantModel) return cachedAssistantModel;
+
+  const envProvider = cleanEnvValue(process.env.VAPI_MODEL_PROVIDER);
+  const envModel = cleanEnvValue(process.env.VAPI_MODEL_NAME);
+  if (envProvider && envModel) {
+    cachedAssistantModel = { provider: envProvider, model: envModel };
+    return cachedAssistantModel;
+  }
+
+  try {
+    const { apiKey } = getVapiConfig();
+    const response = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const provider = data?.model?.provider;
+      const model = data?.model?.model;
+      if (provider && model) {
+        cachedAssistantModel = { provider, model };
+        return cachedAssistantModel;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not fetch Vapi assistant model config:', err.message);
+  }
+
+  cachedAssistantModel = { provider: 'openai', model: 'gpt-4o' };
+  return cachedAssistantModel;
+}
+
 function normalizeQuestion(text) {
   return text?.trim().replace(/\s+/g, ' ') ?? '';
 }
@@ -537,6 +572,9 @@ export async function createVoiceCall({
   );
   const callRecord = rows[0];
 
+  const modelConfig = await getAssistantModelConfig(vapiConfig.assistantId);
+  const systemPrompt = buildAssistantSystemPrompt(restaurant.name, question);
+
   const payload = {
     assistantId: vapiConfig.assistantId,
     phoneNumberId: vapiConfig.phoneNumberId,
@@ -545,10 +583,12 @@ export async function createVoiceCall({
       firstMessageMode: 'assistant-waits-for-user',
       firstMessage: '',
       model: {
+        provider: modelConfig.provider,
+        model: modelConfig.model,
         messages: [
           {
             role: 'system',
-            content: buildAssistantSystemPrompt(restaurant.name, question),
+            content: systemPrompt,
           },
         ],
       },
