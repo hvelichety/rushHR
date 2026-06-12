@@ -241,7 +241,7 @@ function isVapiCallDialing(status) {
   return status === 'queued' || status === 'ringing' || status === 'in-progress' || status === 'forwarding';
 }
 
-async function confirmVapiCallStarted(vapiCallId) {
+async function confirmVapiCallStarted(vapiCallId, { isTestLine = false } = {}) {
   const deadline = Date.now() + VAPI_DIAL_CONFIRM_MS;
 
   while (Date.now() < deadline) {
@@ -252,8 +252,8 @@ async function confirmVapiCallStarted(vapiCallId) {
     }
 
     if (call.status === 'ended') {
-      const reason = call.endedReason || call.endReason || 'ended immediately';
-      throw new Error(`Call failed to start (${reason})`);
+      const reason = call.endedReason || call.endReason || 'unknown';
+      throw new Error(humanizeVapiEndedReason(reason, { isTestLine }));
     }
 
     if (call.status === 'ringing' || call.status === 'in-progress' || call.status === 'forwarding') {
@@ -273,8 +273,13 @@ async function confirmVapiCallStarted(vapiCallId) {
     return last.status;
   }
 
+  if (last?.status === 'ended') {
+    const reason = last.endedReason || last.endReason || 'unknown';
+    throw new Error(humanizeVapiEndedReason(reason, { isTestLine }));
+  }
+
   throw new Error(
-    'Call was accepted but never started dialing. Check Vapi credits, phone number, and assistant config.'
+    'Sorry, the call could not connect. Please try again later.'
   );
 }
 
@@ -397,6 +402,52 @@ function isVoicemailTranscript(text) {
 const VOICEMAIL_USER_MESSAGE =
   'Sorry, the call went to voicemail. Please try again later.';
 
+function isTestRestaurant(restaurant) {
+  if (!restaurant) return false;
+  if (Number(restaurant.id) === 1) return true;
+  return String(restaurant.name || '').trim().toLowerCase() === 'test';
+}
+
+function humanizeVapiEndedReason(reason, { isTestLine = false } = {}) {
+  const r = String(reason || '').toLowerCase();
+
+  if (r.includes('customer-busy') || r === 'busy' || r.includes('line-busy')) {
+    return isTestLine
+      ? 'That phone line is busy. End any other call and try again.'
+      : 'The restaurant line is busy. Please try again in a few minutes.';
+  }
+  if (r.includes('no-answer') || r.includes('no answer') || r.includes('unanswered')) {
+    return isTestLine
+      ? 'No one answered that test number. Try again when you can pick up.'
+      : 'No one answered. Please try again later.';
+  }
+  if (r.includes('voicemail') || r.includes('machine')) {
+    return VOICEMAIL_USER_MESSAGE;
+  }
+  if (r.includes('declined') || r.includes('rejected')) {
+    return isTestLine
+      ? 'The call was not answered. Check Silence Unknown Callers is off, then try again.'
+      : 'The restaurant did not answer. Please try again later.';
+  }
+
+  return 'Sorry, the call could not connect. Please try again later.';
+}
+
+async function markVoiceCallFailed(callRecordId, { vapiCallId, reason, isTestLine, errorMessage }) {
+  const friendly = errorMessage || humanizeVapiEndedReason(reason, { isTestLine });
+  const { rows } = await query(
+    `UPDATE voice_calls
+     SET status = 'failed',
+         error_message = $2,
+         vapi_call_id = COALESCE($3, vapi_call_id),
+         completed_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [callRecordId, friendly, vapiCallId ?? null]
+  );
+  return rows[0];
+}
+
 function resolveCallOutcome(vapiCall, question) {
   const transcript = pickTranscriptFromVapi(vapiCall);
   const endedReason = vapiCall.endedReason || vapiCall.endReason;
@@ -410,15 +461,16 @@ function resolveCallOutcome(vapiCall, question) {
       return {
         transcript,
         failed: true,
-        answerSummary: null,
+        answerSummary: VOICEMAIL_USER_MESSAGE,
         errorMessage: VOICEMAIL_USER_MESSAGE,
       };
     }
+    const friendly = humanizeVapiEndedReason(endedReason);
     return {
       transcript,
       failed: true,
-      answerSummary: `Call ended (${endedReason}). No answer was captured.`,
-      errorMessage: String(endedReason),
+      answerSummary: friendly,
+      errorMessage: friendly,
     };
   }
 
@@ -571,6 +623,7 @@ export async function createVoiceCall({
     [restaurantId, question, deviceId || null, pushToken || null]
   );
   const callRecord = rows[0];
+  const isTestLine = isTestRestaurant(restaurant);
 
   const modelConfig = await getAssistantModelConfig(vapiConfig.assistantId);
   const systemPrompt = buildAssistantSystemPrompt(restaurant.name, question);
@@ -659,14 +712,16 @@ export async function createVoiceCall({
 
   if (data.status === 'ended') {
     const reason = data.endedReason || data.endReason || 'unknown';
-    const message = `Call could not connect (${reason})`;
-    await query(
-      `UPDATE voice_calls
-       SET status = 'failed', error_message = $2, vapi_call_id = $3, completed_at = NOW()
-       WHERE id = $1`,
-      [callRecord.id, message, vapiCallId]
-    );
-    throw new Error(message);
+    const failedRow = await markVoiceCallFailed(callRecord.id, {
+      vapiCallId,
+      reason,
+      isTestLine,
+    });
+    return {
+      ...mapVoiceCall(failedRow, { restaurantName: restaurant.name }),
+      destinationPhone,
+      fromPhoneNumber: vapiConfig.fromPhoneNumber,
+    };
   }
 
   const { rows: updatedRows } = await query(
@@ -678,15 +733,19 @@ export async function createVoiceCall({
   );
 
   try {
-    await confirmVapiCallStarted(vapiCallId);
+    await confirmVapiCallStarted(vapiCallId, { isTestLine });
   } catch (err) {
-    await query(
-      `UPDATE voice_calls
-       SET status = 'failed', error_message = $2, completed_at = NOW()
-       WHERE id = $1`,
-      [callRecord.id, err.message]
-    );
-    throw err;
+    const failedRow = await markVoiceCallFailed(callRecord.id, {
+      vapiCallId,
+      errorMessage: err instanceof Error ? err.message : undefined,
+      reason: 'unknown',
+      isTestLine,
+    });
+    return {
+      ...mapVoiceCall(failedRow, { restaurantName: restaurant.name }),
+      destinationPhone,
+      fromPhoneNumber: vapiConfig.fromPhoneNumber,
+    };
   }
 
   console.log(`📞 Vapi call started: ${vapiCallId} → ${destinationPhone}`);

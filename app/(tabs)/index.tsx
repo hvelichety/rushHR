@@ -709,8 +709,9 @@ useEffect(() => {
       setAskModalOpen(false);
       setRequested(r);
       setActiveQuestion(question);
-      setCallStatus('calling');
-      setAnswerSummary(null);
+      const alreadyFailed = call.status === 'failed';
+      setCallStatus(alreadyFailed ? 'failed' : 'calling');
+      setAnswerSummary(alreadyFailed ? (call.errorMessage ?? null) : null);
       setActiveDestinationPhone(call.destinationPhone ?? r.phone ?? null);
       setActiveFromPhone(call.fromPhoneNumber ?? null);
       setActiveIsTestLine(r.id === TEST_RESTAURANT_ID);
@@ -726,16 +727,30 @@ useEffect(() => {
       upsertCall({ ...call, restaurantName: r.name }, r.name);
 
       Toast.show({
-        type: 'success',
-        text1: r.id === TEST_RESTAURANT_ID ? 'Calling your test number...' : `Calling ${r.name}...`,
-        text2:
-          r.id === TEST_RESTAURANT_ID
+        type: alreadyFailed ? 'error' : 'success',
+        text1: alreadyFailed
+          ? 'Call not placed'
+          : r.id === TEST_RESTAURANT_ID
+            ? 'Calling your test number...'
+            : `Calling ${r.name}...`,
+        text2: alreadyFailed
+          ? call.errorMessage || 'Please try again'
+          : r.id === TEST_RESTAURANT_ID
             ? call.fromPhoneNumber
               ? `Your phone should ring. Caller ID: ${call.fromPhoneNumber}`
               : 'Your phone should ring — answer as the restaurant'
             : 'Your phone won\'t ring. We\'ll show the answer here.',
       });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(
+        alreadyFailed
+          ? Haptics.NotificationFeedbackType.Error
+          : Haptics.NotificationFeedbackType.Success
+      );
+
+      if (alreadyFailed) {
+        setActiveCallRestaurantId(null);
+        return;
+      }
 
       void (async () => {
         try {
