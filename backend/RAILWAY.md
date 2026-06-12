@@ -39,17 +39,22 @@ Force refresh: `POST /restaurants/sync` with `{ "lat": 40.46, "lng": -74.66, "fo
 
 Force refresh: `POST /restaurants/sync` with `{ "lat": 40.46, "lng": -74.66, "force": true }`
 
-Also set the same webhook URL on the Vapi assistant (**Advanced → Server URL**).
+### Vapi assistant prompt
 
-### Vapi system prompt (one-time)
+The backend **overrides the system prompt on every call** (`assistantOverrides.model.messages`) so the agent:
 
-The API sends `call_behavior_rules` on every call so the agent handles "anything else?" without re-reading the whole order. Add this to your **RushHour assistant system prompt** in [dashboard.vapi.ai](https://dashboard.vapi.ai) (near the top, after your role description):
+- Waits for the restaurant to say hello first (`firstMessageMode: assistant-waits-for-user`)
+- Speaks naturally to staff — never narrates internal instructions ("navigating the call…")
+
+You can keep a minimal placeholder in the [Vapi dashboard](https://dashboard.vapi.ai) assistant, but **per-call behavior comes from the API**, not the dashboard prompt.
+
+Optional dashboard fallback (only if you remove the API override):
 
 ```
 {{call_behavior_rules}}
 ```
 
-Keep your existing `{{user_question}}` and `{{restaurant_name}}` variables. Without `{{call_behavior_rules}}` in the dashboard prompt, the backend rules are sent but the model will not see them.
+Also set the same webhook URL on the Vapi assistant (**Advanced → Server URL**).
 
 ## 3. Deploy & get URL
 

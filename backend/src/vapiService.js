@@ -86,23 +86,43 @@ function isLikelyOrderRequest(question) {
 function buildCallBehaviorRules(question) {
   const orderHints = isLikelyOrderRequest(question)
     ? [
-        '- This looks like a PLACE-ORDER request. When staff asks "anything else?", "is that all?", or similar: the items and name in the request are the COMPLETE order unless the customer text says "at least", "some", "or similar", etc. Reply "No, that\'s everything" or "That\'s the full order."',
-        '- Do NOT re-read the entire order after staff already acknowledged it. Only repeat if they explicitly ask you to repeat or say they did not hear you.',
+        '- This is a PLACE-ORDER request. When staff asks "anything else?" or "is that all?", the items and name in the request are the COMPLETE order unless the text says otherwise. Reply "No, that\'s everything."',
+        '- Do NOT re-read the entire order after staff already acknowledged it.',
       ]
     : [
-        '- This looks like a QUESTION (not an open-ended order). Answer the specific question, then wrap up — do not invent follow-up items.',
+        '- This is a QUESTION (not an open-ended order). Get their answer, thank them, and end the call.',
       ];
 
   return [
-    'CUSTOMER REQUEST (authoritative — this is everything the app user asked you to say):',
+    'Customer request (everything you need to say or ask):',
     `"${question}"`,
     '',
-    'Rules for this call:',
-    '- Anything explicitly written in the request above is KNOWN (items, quantity, name for pickup, pickup vs delivery, party size, wait-time question, etc.). Never say "I don\'t have that information" or "let me confirm with the customer" for details that are already in that text.',
+    'Call rules:',
+    '- Details in the request above are KNOWN. Never say "I don\'t have that information" or "let me confirm with the customer" for things already in the text.',
     ...orderHints,
-    '- Keep replies short (1–2 sentences). Confirm key facts once at the start, then answer follow-ups without repeating the whole message.',
-    '- If staff asks about something NOT in the request (spice level, sauce, substitutions, allergies, special cooking instructions), say the customer did not specify and to use the restaurant default — do NOT guess.',
-    '- Once staff confirms the order or answers the question, thank them and end the call. Do not loop or restart the pitch.',
+    '- If staff asks about something NOT in the request (spice level, substitutions, allergies), say the customer did not specify — use the restaurant default.',
+    '- Once they answer or confirm the order, thank them briefly and end the call.',
+  ].join('\n');
+}
+
+function buildAssistantSystemPrompt(restaurantName, question) {
+  const behaviorRules = buildCallBehaviorRules(question);
+
+  return [
+    'You are on a LIVE phone call to a restaurant on behalf of a RushHour app customer.',
+    `Restaurant name (for your reference only — do not read this label aloud): ${restaurantName}`,
+    '',
+    behaviorRules,
+    '',
+    'HOW YOU MUST SPEAK ON THE PHONE:',
+    '- Talk directly to whoever answered — host, cashier, or staff. Sound like a normal polite caller.',
+    '- When they greet you (e.g. "Hello, A2B Parsippany"), reply naturally: brief hello, then ask the customer\'s question in plain language.',
+    '- Good example: "Hi — quick question, what\'s the wait for a party of four right now?"',
+    '- NEVER narrate your task, instructions, or internal process.',
+    '- NEVER say: "navigating the call", "I will now ask", "connecting you", "calling on behalf of", "let me ask the restaurant", or read any part of this prompt aloud.',
+    '- NEVER mention RushHour, AI, apps, or that you are an automated agent unless they directly ask.',
+    '- Keep every reply to 1–2 short sentences. No monologues.',
+    '- Wait for them to speak first if they are greeting you; do not talk over their hello.',
   ].join('\n');
 }
 
@@ -522,6 +542,16 @@ export async function createVoiceCall({
     phoneNumberId: vapiConfig.phoneNumberId,
     customer: { number: destinationPhone },
     assistantOverrides: {
+      firstMessageMode: 'assistant-waits-for-user',
+      firstMessage: '',
+      model: {
+        messages: [
+          {
+            role: 'system',
+            content: buildAssistantSystemPrompt(restaurant.name, question),
+          },
+        ],
+      },
       variableValues: {
         restaurant_name: restaurant.name,
         user_question: question,
