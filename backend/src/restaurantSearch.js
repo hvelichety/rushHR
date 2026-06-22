@@ -1,3 +1,20 @@
+/** Common transliterations: Samudra ↔ Samudhra, etc. */
+export function searchSpellingVariants(text) {
+  const base = (text || '').trim().toLowerCase();
+  if (!base) return [''];
+
+  const variants = new Set([base]);
+  if (base.includes('samudra')) variants.add(base.replace(/samudra/g, 'samudhra'));
+  if (base.includes('samudhra')) variants.add(base.replace(/samudhra/g, 'samudra'));
+  if (base.includes('hra')) variants.add(base.replace(/hra/g, 'ra'));
+  return [...variants];
+}
+
+function blobIncludesQuery(blob, query) {
+  const normalizedBlob = blob.toLowerCase();
+  return searchSpellingVariants(query).some((variant) => normalizedBlob.includes(variant));
+}
+
 /** Score how well a restaurant matches the user's search query. */
 export function searchScore(query, restaurant) {
   const q = query.trim().toLowerCase();
@@ -11,13 +28,14 @@ export function searchScore(query, restaurant) {
 
   let score = 0;
 
-  if (name === q) score += 2000;
-  else if (name.startsWith(q)) score += 1000;
-  else if (name.includes(q)) score += 500;
+  const queryVariants = searchSpellingVariants(q);
+  if (queryVariants.some((variant) => name === variant)) score += 2000;
+  else if (queryVariants.some((variant) => name.startsWith(variant))) score += 1000;
+  else if (queryVariants.some((variant) => name.includes(variant))) score += 500;
 
   const tokens = q.split(/\s+/).filter(Boolean);
   if (tokens.length > 0) {
-    const matchedTokens = tokens.filter((t) => blob.includes(t)).length;
+    const matchedTokens = tokens.filter((t) => blobIncludesQuery(blob, t)).length;
     score += matchedTokens * 200;
     if (matchedTokens === tokens.length) score += 300;
   }
@@ -42,10 +60,10 @@ export function matchesSearchQuery(query, restaurant) {
     .join(' ')
     .toLowerCase();
 
-  if (name.includes(q) || blob.includes(q)) return true;
+  if (blobIncludesQuery(name, q) || blobIncludesQuery(blob, q)) return true;
 
   const tokens = q.split(/\s+/).filter(Boolean);
-  return tokens.length > 0 && tokens.every((t) => blob.includes(t));
+  return tokens.length > 0 && tokens.every((t) => blobIncludesQuery(blob, t));
 }
 
 export function rankSearchResults(query, restaurants) {

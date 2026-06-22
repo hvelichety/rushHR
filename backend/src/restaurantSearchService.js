@@ -2,7 +2,7 @@ import { isYelpConfigured, searchRestaurants } from './yelpClient.js';
 import { query } from './db.js';
 import { importYelpBusinesses } from './restaurantDiscovery.js';
 import { mapRestaurantRow } from './restaurantService.js';
-import { rankSearchResults } from './restaurantSearch.js';
+import { rankSearchResults, searchSpellingVariants } from './restaurantSearch.js';
 
 const SEARCH_MARKETS = (
   process.env.YELP_SEARCH_MARKETS ||
@@ -49,12 +49,15 @@ async function fetchQueuePartnersMatchingTerm(term) {
   const trimmed = term.trim();
   if (trimmed.length < 2) return [];
 
+  const patterns = searchSpellingVariants(trimmed).map((variant) => `%${variant}%`);
+  const conditions = patterns.map((_, index) => `LOWER(r.name) LIKE LOWER($${index + 1})`).join(' OR ');
+
   const { rows } = await query(
     `SELECT r.*
      FROM restaurants r
      WHERE r.queue_enabled IS TRUE
-       AND LOWER(r.name) LIKE LOWER($1)`,
-    [`%${trimmed}%`]
+       AND (${conditions})`,
+    patterns
   );
   return rows;
 }

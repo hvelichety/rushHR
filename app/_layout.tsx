@@ -17,6 +17,10 @@ export default function RootLayout() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="queue/[entryId]" options={{ headerShown: false, title: 'Queue Status' }} />
+        <Stack.Screen
+          name="timeslots/confirmation/[bookingId]"
+          options={{ headerShown: false, title: 'Slot Confirmation' }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
       <StatusBar style="auto" />

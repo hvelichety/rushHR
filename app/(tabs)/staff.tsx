@@ -1,6 +1,7 @@
 import CodeSearchPanel from '@/components/queue/CodeSearchPanel';
 import QueueControls from '@/components/queue/QueueControls';
 import QueueEntryRow from '@/components/queue/QueueEntryRow';
+import TimeSlotStaffPanel from '@/components/timeslots/TimeSlotStaffPanel';
 import { QUEUE_COLORS } from '@/constants/queueTheme';
 import {
   callNextCustomer,
@@ -28,6 +29,7 @@ import {
 import Toast from 'react-native-toast-message';
 
 export default function StaffDashboardScreen() {
+  const [staffMode, setStaffMode] = useState<'queue' | 'timeslots'>('queue');
   const [locations, setLocations] = useState<BusinessLocation[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
   const [location, setLocation] = useState<BusinessLocation | null>(null);
@@ -206,6 +208,27 @@ export default function StaffDashboardScreen() {
         </View>
       </View>
 
+      <View style={styles.modePicker}>
+        <TouchableOpacity
+          style={[styles.modeChip, staffMode === 'queue' && styles.modeChipActive]}
+          onPress={() => setStaffMode('queue')}
+        >
+          <Text style={[styles.modeChipText, staffMode === 'queue' && styles.modeChipTextActive]}>
+            Queue
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.modeChip, staffMode === 'timeslots' && styles.modeChipActive]}
+          onPress={() => setStaffMode('timeslots')}
+        >
+          <Text
+            style={[styles.modeChipText, staffMode === 'timeslots' && styles.modeChipTextActive]}
+          >
+            TimeSlots
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.locationPicker}>
         {locations.map((loc) => (
           <TouchableOpacity
@@ -230,6 +253,11 @@ export default function StaffDashboardScreen() {
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={QUEUE_COLORS.primary} />
         </View>
+      ) : staffMode === 'timeslots' ? (
+        <TimeSlotStaffPanel
+          locationId={selectedLocationId!}
+          locationName={location.name}
+        />
       ) : (
         <FlatList
           data={queue}
@@ -319,6 +347,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#DBEAFE',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  modePicker: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    gap: 8,
+    marginBottom: 10,
+  },
+  modeChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: QUEUE_COLORS.card,
+    borderWidth: 1,
+    borderColor: QUEUE_COLORS.border,
+    alignItems: 'center',
+  },
+  modeChipActive: {
+    backgroundColor: QUEUE_COLORS.primary,
+    borderColor: QUEUE_COLORS.primary,
+  },
+  modeChipText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: QUEUE_COLORS.textSecondary,
+  },
+  modeChipTextActive: {
+    color: '#FFF',
   },
   locationPicker: {
     flexDirection: 'row',

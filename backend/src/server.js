@@ -29,6 +29,20 @@ import { createVoiceCall, getVoiceCall, getVoiceCallsForDevice, handleVapiWebhoo
 import { getRestaurantById, listRestaurants } from './restaurantService.js';
 import { syncRestaurantsFromYelp } from './restaurantDiscovery.js';
 import { findRestaurantsBySearch } from './restaurantSearchService.js';
+import {
+  bookTimeSlot,
+  cancelBooking,
+  closeTimeSlot,
+  createTimeSlot,
+  getActiveBookingForDevice,
+  getBookingById,
+  getBookingsForSlot,
+  getTimeSlotById,
+  getTimeSlotsForRestaurant,
+  markBookingArrived,
+  markBookingNoShow,
+  updateTimeSlot,
+} from './timeSlotService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -381,6 +395,141 @@ app.delete('/notifications/pending', (req, res) => {
   const { ids } = req.body;
   clearPendingNotifications(ids);
   res.json({ cleared: true });
+});
+
+// --- TimeSlots (scheduled arrival) ---
+
+app.get('/locations/:locationId/time-slots', async (req, res) => {
+  try {
+    const locationId = Number(req.params.locationId);
+    const location = await getLocation(locationId);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    const slots = await getTimeSlotsForRestaurant(locationId, {
+      from: req.query.from,
+      to: req.query.to,
+    });
+    res.json(slots);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/time-slots', async (req, res) => {
+  try {
+    const { restaurantId, startTime, endTime, capacity } = req.body;
+    if (!restaurantId) return res.status(400).json({ error: 'restaurantId is required' });
+
+    const slot = await createTimeSlot(Number(restaurantId), {
+      startTime,
+      endTime,
+      capacity,
+    });
+    res.status(201).json(slot);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.patch('/time-slots/:slotId', async (req, res) => {
+  try {
+    const slot = await updateTimeSlot(Number(req.params.slotId), {
+      capacity: req.body.capacity,
+      status: req.body.status,
+    });
+    res.json(slot);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/time-slots/:slotId/close', async (req, res) => {
+  try {
+    res.json(await closeTimeSlot(Number(req.params.slotId)));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/time-slots/:slotId/bookings', async (req, res) => {
+  try {
+    res.json(await getBookingsForSlot(Number(req.params.slotId)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/time-slots/:slotId/book', async (req, res) => {
+  try {
+    const { customerName, phoneNumber, partySize, deviceId } = req.body;
+    const booking = await bookTimeSlot({
+      timeSlotId: Number(req.params.slotId),
+      customerName,
+      phoneNumber,
+      partySize,
+      deviceId,
+    });
+    res.status(201).json(booking);
+  } catch (err) {
+    if (err.code === 'ALREADY_BOOKED') {
+      return res.status(409).json({
+        error: err.message,
+        code: err.code,
+        existingBookingId: err.existingBookingId,
+      });
+    }
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/time-slot-bookings/active', async (req, res) => {
+  try {
+    const { deviceId } = req.query;
+    if (!deviceId || typeof deviceId !== 'string') {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+    const booking = await getActiveBookingForDevice(deviceId);
+    res.json(booking);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/time-slot-bookings/:bookingId', async (req, res) => {
+  try {
+    const booking = await getBookingById(Number(req.params.bookingId));
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    res.json(booking);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/time-slot-bookings/:bookingId/cancel', async (req, res) => {
+  try {
+    const booking = await cancelBooking(Number(req.params.bookingId), {
+      deviceId: req.body.deviceId,
+    });
+    res.json(booking);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/time-slot-bookings/:bookingId/arrived', async (req, res) => {
+  try {
+    res.json(await markBookingArrived(Number(req.params.bookingId)));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/time-slot-bookings/:bookingId/no-show', async (req, res) => {
+  try {
+    res.json(await markBookingNoShow(Number(req.params.bookingId)));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
